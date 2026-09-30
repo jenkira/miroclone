@@ -3,9 +3,9 @@ import {
   validateClassificationChange,
   type BoardRole,
 } from "@miroclone/shared";
-import { roleOnBoard, type Actor, type Db } from "@miroclone/server-core";
+import { RECYCLE_DAYS, roleOnBoard, type Actor, type Db } from "@miroclone/server-core";
 
-export { roleOnBoard, type Actor };
+export { RECYCLE_DAYS, roleOnBoard, type Actor };
 
 export interface BoardRow {
   id: string;
@@ -18,7 +18,6 @@ export interface BoardRow {
   starred: boolean;
 }
 
-export const RECYCLE_DAYS = 30;
 
 export class Forbidden extends Error {}
 export class NotFound extends Error {}

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { defaultClassifications } from "@miroclone/shared";
 import { api, type BoardSummary, type Me } from "./api.js";
 import { Banner } from "./Banner.js";
+import { Notifications } from "./Notifications.js";
 import { clearOfflineCache } from "./offline.js";
 
 const filters = [["recent", "Recent"], ["owned", "Owned by me"], ["shared", "Shared with me"], ["starred", "Starred"], ["deleted", "Recycle bin"]] as const;
@@ -18,7 +19,7 @@ export function Dashboard({ me }: { me: Me }) {
     <main style={{ fontFamily: "system-ui", maxWidth: 900, margin: "0 auto" }}>
       <Banner classification={classification} />
       <h1>Boards</h1>
-      <p>Signed in as {me.name}. <button onClick={async () => { await clearOfflineCache(); await api.logout(); location.reload(); }}>Sign out</button></p>
+      <p>Signed in as {me.name}. <Notifications /> <button onClick={async () => { await clearOfflineCache(); await api.logout(); location.reload(); }}>Sign out</button></p>
       <form onSubmit={async (e) => { e.preventDefault(); const { id } = await api.createBoard(title, classification); location.hash = `#/board/${id}`; }}>
         <label>Title <input value={title} onChange={(e) => setTitle(e.target.value)} required /></label>{" "}
         <label>Classification{" "}

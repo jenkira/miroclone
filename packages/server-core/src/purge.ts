@@ -1,6 +1,8 @@
-import type { Db } from "@miroclone/server-core";
-import { RECYCLE_DAYS } from "./boards.js";
+import type { Db } from "./db.js";
 import type { ObjectStore } from "./objectstore.js";
+
+/** Days that a deleted board stays in the recycle bin (BRD-1). */
+export const RECYCLE_DAYS = 30;
 
 /**
  * Permanently removes boards that have sat in the recycle bin too long, and the stored files they reference.

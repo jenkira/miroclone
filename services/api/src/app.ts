@@ -3,7 +3,7 @@ import cookie from "@fastify/cookie";
 import { validateClaims, type EntraClaims } from "@miroclone/shared";
 import { sealTokens } from "@miroclone/server-core";
 import type { GraphClient } from "./graph.js";
-import type { ObjectStore } from "./objectstore.js";
+import type { ObjectStore } from "@miroclone/server-core";
 import type { Scanner } from "./scanner.js";
 import { audit } from "./audit.js";
 import { pkceChallenge, pkceVerifier, type OidcClient } from "./oidc.js";

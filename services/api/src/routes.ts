@@ -5,11 +5,12 @@ import { appendUpdate, openTokens, sealTokens } from "@miroclone/server-core";
 import { createHash, randomUUID } from "node:crypto";
 import type { GraphClient } from "./graph.js";
 import { detectImageType, MAX_UPLOAD_BYTES, svgProblem } from "./files.js";
-import type { ObjectStore } from "./objectstore.js";
+import type { ObjectStore } from "@miroclone/server-core";
 import type { Scanner } from "./scanner.js";
 import type { OidcClient } from "./oidc.js";
 import { audit } from "./audit.js";
 import * as boards from "./boards.js";
+import * as comments from "./comments.js";
 import type { Db } from "@miroclone/server-core";
 import { SESSION_COOKIE, type Session, type SessionManager } from "@miroclone/server-core";
 
@@ -131,6 +132,7 @@ export function boardRoutes(app: FastifyInstance, opts: { db: Db; sessions: Sess
       if (!role) throw new boards.NotFound();
       const { rows } = await db.query("SELECT id, title, classification, updated_at FROM boards WHERE id = $1", [req.params.id]);
       audit({ action: "board_access", actor: req.session!.userId, boardId: req.params.id });
+      await comments.recordParticipant(db, req.params.id, req.session!.userId);
       return { ...rows[0], role };
     });
 
@@ -193,6 +195,38 @@ export function boardRoutes(app: FastifyInstance, opts: { db: Db; sessions: Sess
         audit({ action: "classification_change", actor: req.session!.userId, boardId: req.params.id, detail: { ...change, reason: req.body.reason } });
         return change;
       });
+
+    // --- Comments and notifications (COL-7, COL-8) ---
+    api.get<{ Params: { id: string } }>("/api/boards/:id/comments", async (req) => comments.listThreads(db, actorOf(req), req.params.id));
+    api.get<{ Params: { id: string } }>("/api/boards/:id/mentionable", async (req) => comments.mentionCandidates(db, actorOf(req), req.params.id));
+
+    api.post<{ Params: { id: string }; Body: { body: string; threadId?: string; anchor?: unknown } }>("/api/boards/:id/comments", async (req, reply) =>
+      reply.code(201).send(await comments.addComment(db, actorOf(req), req.params.id, req.body ?? {} as never)));
+
+    api.put<{ Params: { id: string; threadId: string }; Body: { resolved: boolean } }>("/api/boards/:id/threads/:threadId/resolved", async (req) => {
+      if (!UUID.test(req.params.threadId)) throw new boards.NotFound();
+      await comments.setResolved(db, actorOf(req), req.params.id, req.params.threadId, !!req.body?.resolved);
+      return { ok: true };
+    });
+
+    api.patch<{ Params: { id: string; commentId: string }; Body: { body: string } }>("/api/boards/:id/comments/:commentId", async (req) => {
+      if (!UUID.test(req.params.commentId)) throw new boards.NotFound();
+      await comments.editComment(db, actorOf(req), req.params.id, req.params.commentId, req.body?.body ?? "");
+      return { ok: true };
+    });
+
+    api.delete<{ Params: { id: string; commentId: string } }>("/api/boards/:id/comments/:commentId", async (req) => {
+      if (!UUID.test(req.params.commentId)) throw new boards.NotFound();
+      await comments.deleteComment(db, actorOf(req), req.params.id, req.params.commentId);
+      return { ok: true };
+    });
+
+    api.get("/api/notifications", async (req) => comments.listNotifications(db, actorOf(req)));
+    api.post<{ Body: { ids?: string[] } }>("/api/notifications/read", async (req) => {
+      const ids = Array.isArray(req.body?.ids) ? req.body.ids.filter((i) => UUID.test(i)) : undefined;
+      await comments.markRead(db, actorOf(req), ids);
+      return { ok: true };
+    });
 
     // Files are built in the browser, so board content never passes through this endpoint.
     // The call checks the export policy and writes the audit event (ADM-1, EXP-5).

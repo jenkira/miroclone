@@ -1,6 +1,10 @@
 export interface Me { id: string; name: string; email?: string; isAdmin: boolean }
 export interface Person { type: "user" | "group"; id: string; name: string; email?: string }
 export interface Member { type: "user" | "group"; id: string; name: string; role: string }
+export interface Anchor { objectId?: string; x?: number; y?: number }
+export interface CommentRow { id: string; threadId: string; authorId: string; authorName: string; body: string; createdAt: string; editedAt: string | null }
+export interface Thread { id: string; anchor: Anchor | null; resolved: boolean; resolvedBy: string | null; comments: CommentRow[] }
+export interface Notification { id: string; kind: "mention" | "reply"; boardId: string; boardTitle: string; classification: string; actorName: string; createdAt: string; read: boolean }
 export interface BoardSummary { id: string; title: string; classification: string; role: string; starred: boolean; updated_at: string }
 
 async function call<T>(method: string, url: string, body?: unknown): Promise<T> {
@@ -36,6 +40,14 @@ export const api = {
     if (!res.ok) throw Object.assign(new Error(`${res.status}`), { status: res.status });
     return res.blob();
   },
+  threads: (id: string) => call<Thread[]>("GET", `/api/boards/${id}/comments`),
+  mentionable: (id: string) => call<{ id: string; name: string }[]>("GET", `/api/boards/${id}/mentionable`),
+  addComment: (id: string, body: { body: string; threadId?: string; anchor?: Anchor }) => call<{ id: string; threadId: string }>("POST", `/api/boards/${id}/comments`, body),
+  resolveThread: (id: string, threadId: string, resolved: boolean) => call<unknown>("PUT", `/api/boards/${id}/threads/${threadId}/resolved`, { resolved }),
+  editComment: (id: string, commentId: string, body: string) => call<unknown>("PATCH", `/api/boards/${id}/comments/${commentId}`, { body }),
+  deleteComment: (id: string, commentId: string) => call<unknown>("DELETE", `/api/boards/${id}/comments/${commentId}`),
+  notifications: () => call<Notification[]>("GET", "/api/notifications"),
+  markRead: (ids?: string[]) => call<unknown>("POST", "/api/notifications/read", ids ? { ids } : {}),
   recordExport: (id: string, format: string, scope = "board") => call<unknown>("POST", `/api/boards/${id}/exports`, { format, scope }),
   importBoard: (file: string, classification?: string) => call<{ id: string }>("POST", "/api/boards/import", { file, classification }),
   logout: () => call<unknown>("POST", "/auth/logout"),

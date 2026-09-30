@@ -7,6 +7,7 @@ import { boundsOf } from "@miroclone/shared";
 import { hitHandle, hitTest, intersects, normaliseRect, resizeFromHandle, rotationFor, strokesHit, type Handle, type Point } from "./geometry.js";
 import { drawCursor, drawObject, drawSelection, Scene, textHeight, withDefaults } from "./render.js";
 import { objectForGesture, type Tool } from "./tools.js";
+import { pinAt, type Pin } from "./pins.js";
 import { fitRect, screenToWorld, zoomAt, type Viewport } from "./viewport.js";
 
 /** What the parent can ask of the canvas. */
@@ -33,6 +34,14 @@ export interface CanvasProps {
   onSelect?: (ids: string[]) => void;
   /** Called with image files dropped on the canvas or pasted into it, and the world point to place them. */
   onFiles?: (files: File[], at: Point) => void;
+  /** Comment pins to draw (COL-7). */
+  pins?: Pin[];
+  selectedPin?: string;
+  onPinClick?: (threadId: string) => void;
+  /** Called when the comment tool is used. `objectId` is set when the click landed on an object. */
+  onComment?: (at: { x: number; y: number; objectId?: string }) => void;
+  /** Commenters can use the comment tool even when the board is read-only for them. */
+  canComment?: boolean;
 }
 
 /** Clipboard shared by every board in this tab, so paste works between boards (CNV-11). It clears on reload and sign-out (COL-10). */
@@ -62,12 +71,15 @@ type Gesture =
 
 const resizable = (o: BoardObject) => o.type !== "connector" && o.type !== "stroke";
 
-export function Canvas({ board, tool, readOnly, awareness, onToolDone, apiRef, onSelect, onFiles }: CanvasProps) {
+export function Canvas({ board, tool, readOnly, awareness, onToolDone, apiRef, onSelect, onFiles, pins, selectedPin, onPinClick, onComment, canComment }: CanvasProps) {
   const host = useRef<HTMLDivElement>(null);
   const toolRef = useRef(tool);
   const roRef = useRef(readOnly);
   const onSelectRef = useRef(onSelect);
   const onFilesRef = useRef(onFiles);
+  const pinsRef = useRef<Pin[]>([]);
+  const pinCb = useRef({ onPinClick, onComment, canComment, selectedPin });
+  const drawPinsRef = useRef<() => void>(() => {});
   const selection = useRef<string[]>([]);
   const view = useRef<Viewport>({ x: 0, y: 0, zoom: 1 });
   const redrawRef = useRef<() => void>(() => {});
@@ -77,6 +89,8 @@ export function Canvas({ board, tool, readOnly, awareness, onToolDone, apiRef, o
   roRef.current = readOnly;
   onSelectRef.current = onSelect;
   onFilesRef.current = onFiles;
+  pinsRef.current = pins ?? [];
+  pinCb.current = { onPinClick, onComment, canComment, selectedPin };
   editingRef.current = editing;
 
   useEffect(() => {
@@ -85,11 +99,13 @@ export function Canvas({ board, tool, readOnly, awareness, onToolDone, apiRef, o
     const world = new Container();
     const objectsLayer = new Container();
     const overlay = new Container();
+    const pinLayer = new Container();
     const cursors = new Container();
     const preview = new Container();
     const scene = new Scene(objectsLayer, board);
     let disposed = false;
     let ready = false;
+    let resizer: ResizeObserver | undefined;
 
     const cull = () => {
       const v = view.current;
@@ -107,11 +123,23 @@ export function Canvas({ board, tool, readOnly, awareness, onToolDone, apiRef, o
     const redraw = () => { if (ready) drawSelections(); };
     redrawRef.current = redraw;
 
+    /** Pins keep a constant size on screen, so they're redrawn when the zoom changes. */
+    const drawPins = () => {
+      if (!ready) return;
+      pinLayer.removeChildren().forEach((c) => c.destroy({ children: true }));
+      const k = 1 / view.current.zoom;
+      for (const p of pinsRef.current) {
+        const sel = p.id === pinCb.current.selectedPin;
+        pinLayer.addChild(new Graphics().circle(p.x, p.y, 11 * k).fill(p.resolved ? 0x9e9e9e : 0xfb8c00).stroke({ width: (sel ? 3 : 1.5) * k, color: sel ? 0x1976d2 : 0xffffff }));
+      }
+    };
+    drawPinsRef.current = drawPins;
     const apply = () => {
       world.position.set(view.current.x, view.current.y);
       world.scale.set(view.current.zoom);
       cull();
       drawSelections();
+      drawPins();
     };
     const setSel = (ids: string[]) => {
       selection.current = ids;
@@ -148,12 +176,16 @@ export function Canvas({ board, tool, readOnly, awareness, onToolDone, apiRef, o
       await app.init({ resizeTo: el, background: "#f5f5f5", antialias: true });
       if (disposed) { app.destroy(); return; }
       el.appendChild(app.canvas);
-      world.addChild(objectsLayer, overlay, cursors, preview);
+      world.addChild(objectsLayer, overlay, pinLayer, cursors, preview);
       app.stage.addChild(world);
       ready = true;
+      // The container changes size when panels open, and Pixi only follows window resizes by itself.
+      resizer = new ResizeObserver(() => { app.resize(); cull(); });
+      resizer.observe(el);
       scene.rebuild();
       cull();
       drawSelections();
+      drawPins();
     })();
 
     board.objects.observe(onObjects);
@@ -173,7 +205,17 @@ export function Canvas({ board, tool, readOnly, awareness, onToolDone, apiRef, o
       const t = toolRef.current;
       const ro = roRef.current;
       if (e.button === 1 || e.button === 2) { gesture = { kind: "pan", last: { x: e.clientX, y: e.clientY } }; return; }
+      if (t === "comment") {
+        if (pinCb.current.canComment) {
+          const pin = pinAt(pinsRef.current, p, view.current.zoom);
+          if (pin) pinCb.current.onPinClick?.(pin.id);
+          else pinCb.current.onComment?.({ x: p.x, y: p.y, objectId: hitTest(board.list(), p)?.id });
+        }
+        return;
+      }
       if (t === "select") {
+        const pin = pinAt(pinsRef.current, p, view.current.zoom);
+        if (pin) { pinCb.current.onPinClick?.(pin.id); return; }
         // Handles first, because they sit on top of the object.
         const only = selection.current.length === 1 ? board.get(selection.current[0]!) : undefined;
         if (only && !ro && !only.locked && only.type !== "connector") {
@@ -335,6 +377,7 @@ export function Canvas({ board, tool, readOnly, awareness, onToolDone, apiRef, o
 
     return () => {
       disposed = true;
+      resizer?.disconnect();
       if (apiRef) apiRef.current = null;
       board.objects.unobserve(onObjects);
       awareness?.off("change", drawCursors);
@@ -351,6 +394,9 @@ export function Canvas({ board, tool, readOnly, awareness, onToolDone, apiRef, o
       try { app.destroy(true, { children: true }); } catch { /* not initialised */ }
     };
   }, [board, awareness, apiRef]);
+
+  // Redraw the pins when they change.
+  useEffect(() => { drawPinsRef.current(); }, [pins, selectedPin]);
 
   const commit = (text: string) => {
     if (!editing) return;

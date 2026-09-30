@@ -2,7 +2,7 @@ import pg from "pg";
 import { migrate } from "@miroclone/server-core";
 import { buildApp } from "./app.js";
 import { GraphClient } from "./graph.js";
-import { S3ObjectStore } from "./objectstore.js";
+import { S3ObjectStore } from "@miroclone/server-core";
 import { ClamdScanner } from "./scanner.js";
 import { EntraOidcClient } from "./oidc.js";
 import { Redis } from "ioredis";

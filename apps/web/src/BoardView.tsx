@@ -2,11 +2,14 @@ import { HocuspocusProvider, HocuspocusProviderWebsocket } from "@hocuspocus/pro
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as Y from "yjs";
 import { Board } from "@miroclone/shared";
-import { api, type BoardSummary, type Me } from "./api.js";
+import { api, type BoardSummary, type Me, type Thread } from "./api.js";
 import { Banner } from "./Banner.js";
 import { Canvas, colourFor, type CanvasApi } from "./Canvas.js";
 import { FormatBar } from "./FormatBar.js";
+import { CommentsPanel } from "./CommentsPanel.js";
 import { ExportMenu } from "./ExportMenu.js";
+import { Notifications } from "./Notifications.js";
+import { pinsFor } from "./pins.js";
 import { cacheBoard, clearOfflineCache } from "./offline.js";
 import { ACCEPTED, MAX_BYTES, sizeFor, uploadMessage, useBoardImages } from "./images.js";
 import { ShareDialog } from "./ShareDialog.js";
@@ -24,9 +27,21 @@ export function BoardView({ id, me }: { id: string; me: Me }) {
   const [selected, setSelected] = useState<string[]>([]);
   const [sharing, setSharing] = useState(false);
   const [notice, setNotice] = useState("");
+  const [threads, setThreads] = useState<Thread[]>([]);
+  const [showComments, setShowComments] = useState(false);
+  const [selectedThread, setSelectedThread] = useState<string>();
+  const [pending, setPending] = useState<{ x: number; y: number; objectId?: string }>();
+  const [, bump] = useState(0);
   const fileInput = useRef<HTMLInputElement>(null);
   const [people, setPeople] = useState<{ id: number; name: string; colour: string }[]>([]);
 
+  const loadThreads = () => api.threads(id).then(setThreads).catch(() => {});
+  useEffect(() => {
+    void loadThreads();
+    // Comments refresh every few seconds while the tab is visible.
+    const t = window.setInterval(() => { if (!document.hidden) void loadThreads(); }, 6000);
+    return () => window.clearInterval(t);
+  }, [id]);
   useEffect(() => { useBoardImages(id); return () => useBoardImages(undefined); }, [id]);
   useEffect(() => { api.board(id).then(setMeta).catch(() => setError("You can't open this board.")); }, [id]);
 
@@ -45,6 +60,8 @@ export function BoardView({ id, me }: { id: string; me: Me }) {
 
   useEffect(() => {
     const { provider, socket, doc } = session;
+    const onObjs = () => bump((n) => n + 1);
+    session.board.objects.observe(onObjs);
     // A user who can reload offline also sees cached content, so the cache is cleared when the server ends the session.
     const stopCache = cacheBoard(id, doc);
     const onAuthFailed = () => { void clearOfflineCache(); };
@@ -54,12 +71,16 @@ export function BoardView({ id, me }: { id: string; me: Me }) {
     const aw = provider.awareness!;
     const onAw = () => setPeople([...aw.getStates().entries()].filter(([, s]) => s.user).map(([cid, s]) => ({ id: cid, name: s.user.name, colour: s.user.colour })));
     aw.on("change", onAw); onAw();
-    return () => { aw.off("change", onAw); provider.off("authenticationFailed", onAuthFailed); stopCache(); provider.destroy(); socket.destroy(); };
+    return () => { session.board.objects.unobserve(onObjs); aw.off("change", onAw); provider.off("authenticationFailed", onAuthFailed); stopCache(); provider.destroy(); socket.destroy(); };
   }, [session, id]);
 
   if (error) return <p role="alert">{error}</p>;
   if (!meta) return <p>Loading board…</p>;
   const readOnly = meta.role === "viewer" || meta.role === "commenter";
+  const canComment = meta.role !== "viewer";
+  const canModerate = meta.role === "owner" || meta.role === "editor";
+  // Pins follow their objects, so they're recomputed when objects change.
+  const pins = pinsFor(threads, (oid) => session.board.get(oid));
 
   /** Uploads images and places each on the board, one after another so they don't overlap. */
   const addImages = async (files: File[], at: { x: number; y: number }) => {
@@ -96,6 +117,8 @@ export function BoardView({ id, me }: { id: string; me: Me }) {
         {meta.role === "owner" && <button onClick={() => setSharing(true)}>Share</button>}
         <ExportMenu board={session.board} title={meta.title} classification={meta.classification} selection={() => apiRef.current?.selection() ?? []}
           authorise={(format, scope) => api.recordExport(id, format, scope) as Promise<void>} loadImage={(fileId) => api.fetchFile(id, fileId)} />
+        <button aria-pressed={showComments} onClick={() => setShowComments(!showComments)}>Comments{threads.filter((t) => !t.resolved).length ? ` (${threads.filter((t) => !t.resolved).length})` : ""}</button>
+        <Notifications />
         <span style={{ marginLeft: "auto", display: "flex", gap: 4 }} aria-label="People on this board">
           {people.map((p) => (
             <button key={p.id} title={p.id === session.doc.clientID ? "You" : `Go to ${p.name}`} disabled={p.id === session.doc.clientID}
@@ -107,9 +130,22 @@ export function BoardView({ id, me }: { id: string; me: Me }) {
         </span>
       </header>
       {notice && <p role="alert" style={{ margin: 0, padding: "2px 8px", background: "#fff3e0" }}>{notice}</p>}
-      <Toolbar tool={tool} onChange={setTool} disabled={readOnly} />
+      <Toolbar tool={tool} onChange={(t) => { setTool(t); if (t === "comment") setShowComments(true); }} disabled={readOnly} canComment={canComment} />
       <FormatBar board={session.board} selection={selected} readOnly={readOnly} api={apiRef} />
-      <Canvas apiRef={apiRef} onSelect={setSelected} onFiles={addImages} board={session.board} tool={tool} readOnly={readOnly} awareness={session.provider.awareness ?? undefined} onToolDone={() => setTool("select")} />
+      <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
+        <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
+          <Canvas apiRef={apiRef} onSelect={setSelected} onFiles={addImages} board={session.board} tool={tool} readOnly={readOnly} awareness={session.provider.awareness ?? undefined}
+            onToolDone={() => setTool("select")}
+            pins={pins} selectedPin={selectedThread} canComment={canComment}
+            onPinClick={(tid) => { setSelectedThread(tid); setShowComments(true); }}
+            onComment={(at) => { setPending(at); setShowComments(true); }} />
+        </div>
+        {showComments && (
+          <CommentsPanel boardId={id} threads={threads} me={me.id} canComment={canComment} canModerate={canModerate}
+            selected={selectedThread} pending={pending} onChanged={() => void loadThreads()}
+            onSelect={setSelectedThread} onPlaced={() => { setPending(undefined); setTool("select"); }} />
+        )}
+      </div>
       <Banner classification={meta.classification} />
       {sharing && <ShareDialog boardId={id} onClose={() => setSharing(false)} />}
     </div>

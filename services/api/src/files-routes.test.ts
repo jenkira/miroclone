@@ -2,8 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import type { EntraClaims } from "@miroclone/shared";
 import { SESSION_COOKIE } from "./app.js";
 import { MAX_UPLOAD_BYTES } from "./files.js";
-import { purgeExpiredBoards } from "./files-purge.js";
-import { MemoryObjectStore } from "./objectstore.js";
+import { purgeExpiredBoards } from "@miroclone/server-core";
+import { MemoryObjectStore } from "@miroclone/server-core";
 import type { Scanner } from "./scanner.js";
 import { db, setup, signIn } from "./testutil.js";
 
