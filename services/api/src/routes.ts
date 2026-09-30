@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import * as Y from "yjs";
-import { atLeast, boardRoles, defaultClassifications, importJson, OBJECTS_MAP, type BoardRole } from "@miroclone/shared";
+import { atLeast, boardRoles, builtinTemplates, defaultClassifications, importJson, OBJECTS_MAP, type BoardRole } from "@miroclone/shared";
 import { appendUpdate, deleteVersion, listVersions, openTokens, sealTokens, searchBoards, snapshot, versionState } from "@miroclone/server-core";
 import { createHash, randomUUID } from "node:crypto";
 import type { GraphClient } from "./graph.js";
@@ -11,6 +11,7 @@ import type { OidcClient } from "./oidc.js";
 import { audit } from "./audit.js";
 import * as boards from "./boards.js";
 import * as comments from "./comments.js";
+import * as workshop from "./workshop.js";
 import type { Db } from "@miroclone/server-core";
 import { SESSION_COOKIE, type Session, type SessionManager } from "@miroclone/server-core";
 
@@ -120,10 +121,13 @@ export function boardRoutes(app: FastifyInstance, opts: { db: Db; sessions: Sess
     api.get<{ Querystring: { filter?: boards.BoardFilter } }>("/api/boards", async (req) =>
       boards.listBoards(db, actorOf(req), req.query.filter));
 
-    api.post<{ Body: { title: string; classification: string } }>("/api/boards", async (req, reply) => {
+    api.post<{ Body: { title: string; classification: string; template?: string } }>("/api/boards", async (req, reply) => {
       if (!isClassification(req.body.classification)) throw new boards.Invalid("unknown classification");
+      // Check the template first, so a board isn't created and then left empty.
+      const start = req.body.template ? await workshop.templateObjects(db, req.body.template, req.body.classification) : undefined;
       const id = await boards.createBoard(db, actorOf(req), req.body.title, req.body.classification);
-      audit({ action: "board_create", actor: req.session!.userId, boardId: id, detail: { classification: req.body.classification } });
+      if (start) await workshop.seedBoard(db, id, start);
+      audit({ action: "board_create", actor: req.session!.userId, boardId: id, detail: { classification: req.body.classification, template: req.body.template } });
       return reply.code(201).send({ id });
     });
 
@@ -195,6 +199,43 @@ export function boardRoutes(app: FastifyInstance, opts: { db: Db; sessions: Sess
         audit({ action: "classification_change", actor: req.session!.userId, boardId: req.params.id, detail: { ...change, reason: req.body.reason } });
         return change;
       });
+
+    // --- Templates (WSH-1, WSH-2) ---
+    api.get("/api/templates", async (req) => ({ builtin: builtinTemplates, organisation: await workshop.listOrgTemplates(db, actorOf(req)) }));
+
+    api.post<{ Body: { boardId: string; name: string; objectIds?: string[] } }>("/api/templates", async (req, reply) => {
+      const ids = Array.isArray(req.body?.objectIds) ? req.body.objectIds.filter((i) => typeof i === "string" && i.length <= 64).slice(0, 5000) : undefined;
+      const id = await workshop.saveOrgTemplate(db, actorOf(req), req.body?.boardId, req.body?.name ?? "", ids);
+      audit({ action: "template_create", actor: req.session!.userId, boardId: req.body.boardId, detail: { templateId: id } });
+      return reply.code(201).send({ id });
+    });
+
+    api.delete<{ Params: { id: string } }>("/api/templates/:id", async (req) => {
+      if (!UUID.test(req.params.id)) throw new boards.NotFound();
+      await workshop.deleteOrgTemplate(db, { ...actorOf(req), isAdmin: req.session!.isAdmin }, req.params.id);
+      return { ok: true };
+    });
+
+    // --- Voting (WSH-4) ---
+    api.get<{ Params: { id: string } }>("/api/boards/:id/votes", async (req) => workshop.voteState(db, actorOf(req), req.params.id));
+    api.post<{ Params: { id: string }; Body: { limit: number; anonymous?: boolean } }>("/api/boards/:id/votes/session", async (req, reply) => {
+      await workshop.startVoting(db, actorOf(req), req.params.id, Number(req.body?.limit), !!req.body?.anonymous);
+      audit({ action: "vote_start", actor: req.session!.userId, boardId: req.params.id, detail: { limit: req.body.limit, anonymous: !!req.body.anonymous } });
+      return reply.code(201).send(await workshop.voteState(db, actorOf(req), req.params.id));
+    });
+    api.post<{ Params: { id: string } }>("/api/boards/:id/votes/close", async (req) => {
+      await workshop.closeVoting(db, actorOf(req), req.params.id);
+      audit({ action: "vote_close", actor: req.session!.userId, boardId: req.params.id });
+      return workshop.voteState(db, actorOf(req), req.params.id);
+    });
+    api.post<{ Params: { id: string }; Body: { objectId: string } }>("/api/boards/:id/votes", async (req) => {
+      await workshop.castVote(db, actorOf(req), req.params.id, req.body?.objectId);
+      return workshop.voteState(db, actorOf(req), req.params.id);
+    });
+    api.delete<{ Params: { id: string }; Body: { objectId: string } }>("/api/boards/:id/votes", async (req) => {
+      await workshop.removeVote(db, actorOf(req), req.params.id, req.body?.objectId);
+      return workshop.voteState(db, actorOf(req), req.params.id);
+    });
 
     // --- Version history (BRD-6) ---
     const editorOn = async (req: FastifyRequest, id: string, min: BoardRole = "editor") => {

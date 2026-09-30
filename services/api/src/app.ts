@@ -37,6 +37,8 @@ export function buildApp(opts: AppOptions) {
   const cookieOpts = { httpOnly: true, secure, sameSite: "lax" as const, path: "/" };
 
   app.get("/healthz", async () => ({ status: "ok" }));
+  // The shared timer uses this to line up clocks across browsers (WSH-3).
+  app.get("/api/time", async () => ({ now: Date.now() }));
   app.get("/readyz", async () => ({ status: "ready" }));
 
   app.get("/auth/login", async (_req, reply) => {
