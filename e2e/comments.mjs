@@ -1,7 +1,7 @@
 // Comments, mentions, and notification email (COL-7, COL-8) against the full stack.
 // Also needs the SMTP sink (`pnpm --filter @miroclone/worker smtp-sink`). The script starts two workers itself.
 import { chromium } from "playwright-core";
-import { spawn } from "node:child_process";
+import { execSync, spawn } from "node:child_process";
 
 const APP = "http://127.0.0.1:5199", IDP = "http://127.0.0.1:4010", SINK = "http://127.0.0.1:2526";
 const res = [];
@@ -10,6 +10,21 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH ?? "/opt/pw-browsers/chromium", args: ["--use-gl=swiftshader", "--enable-unsafe-swiftshader", "--no-sandbox"] });
 const mails = () => fetch(`${SINK}/mails`).then((r) => r.json());
 await fetch(`${SINK}/clear`);
+// Start from no notifications, so those left by an earlier run are not counted. This is a test database.
+execSync(`psql -h ${process.env.POSTGRES_HOST} -p ${process.env.POSTGRES_PORT ?? 5432} -U ${process.env.POSTGRES_USER} -d ${process.env.POSTGRES_DB} -qc "DELETE FROM notifications"`, { env: { ...process.env, PGPASSWORD: process.env.POSTGRES_PASSWORD } });
+
+/** Polls until the pixel satisfies the test, because pins appear after the thread list reloads. */
+async function pixelIs(page, wx, wy, test, ms = 6000) {
+  // The canvas moves when the header wraps, for example as more people join, so measure it each time.
+  const end = Date.now() + ms; let p;
+  do {
+    const b = await page.evaluate(() => { const r = document.querySelector("[role=application]").getBoundingClientRect(); return { x: r.left, y: r.top }; });
+    p = await pixel(page, b.x + wx, b.y + wy);
+    if (test(p)) return [true, p];
+    await wait(250);
+  } while (Date.now() < end);
+  return [false, p];
+}
 
 async function login(user) {
   await fetch(`${IDP}/switch?user=${user}`);
@@ -61,8 +76,7 @@ await ann.page.getByRole("button", { name: "Comment", exact: true }).last().clic
 await ann.page.getByText("Can we confirm the date").first().waitFor();
 await ann.page.getByRole("complementary", { name: "Comments" }).locator("strong", { hasText: "@Bob Builder" }).waitFor();
 check("the comment appears in a thread, with the mention in bold", true);
-await wait(300);
-check("a pin is drawn at the clicked spot", orange(await pixel(ann.page, box.x + 300, box.y + 200)), JSON.stringify(await pixel(ann.page, box.x + 300, box.y + 200)));
+{ const [ok, p] = await pixelIs(ann.page, 300, 200, orange); check("a pin is drawn at the clicked spot", ok, JSON.stringify(p)); }
 
 // 2. Bob is notified in the app
 await bob.page.reload();
@@ -95,12 +109,10 @@ check("a reply notifies the other person in the thread", true);
 await ann.page.getByText("Confirmed for 12 March").waitFor({ timeout: 15000 });
 check("Bob's reply appears for Ann without a reload", true);
 await ann.page.getByRole("button", { name: "Resolve" }).click();
-await wait(800);
-check("resolving turns the pin grey", grey(await pixel(ann.page, box.x + 300, box.y + 200)), JSON.stringify(await pixel(ann.page, box.x + 300, box.y + 200)));
+{ const [ok, p] = await pixelIs(ann.page, 300, 200, grey); check("resolving turns the pin grey", ok, JSON.stringify(p)); }
 await ann.page.getByRole("button", { name: /Show 1 resolved/ }).click();
 await ann.page.getByRole("button", { name: "Reopen" }).click();
-await wait(800);
-check("reopening turns it orange again", orange(await pixel(ann.page, box.x + 300, box.y + 200)));
+{ const [ok] = await pixelIs(ann.page, 300, 200, orange); check("reopening turns it orange again", ok); }
 
 // 5. A viewer reads comments but can't write
 const eve = await login("eve");
@@ -120,8 +132,8 @@ for (let i = 0; i < 12; i++) {
 }
 for (let i = 0; i < 40 && (await mails()).length < 12; i++) await wait(1000);
 await wait(3000);
-const final = await mails();
-check("12 mentions produce exactly 12 emails across two workers", final.length === 12, `${final.length} mails`);
+const final = (await mails()).filter((m) => m.to.includes("bob@example.test"));
+check("12 mentions produce exactly 12 emails to Bob across two workers", final.length === 12, `${final.length} mails`);
 for (const w of workers) { try { process.kill(-w.pid); } catch { /* already gone */ } }
 
 await browser.close();

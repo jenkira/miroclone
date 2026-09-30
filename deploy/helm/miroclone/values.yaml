@@ -14,6 +14,11 @@ services:
     tag: "0.1.0"
     port: 3000
     replicas: 2
+  worker:
+    image: miroclone/worker
+    tag: "0.1.0"
+    port: 8081
+    replicas: 1
   collab:
     image: miroclone/collab
     tag: "0.1.0"
@@ -60,6 +65,15 @@ tls:
   caConfigMap: ""
   caKey: ca.crt
 
+# The internal mail relay that sends notification emails (COL-8). Leave host empty to keep notifications in the app only.
+# Emails hold a link and the board's classification, and no board content.
+smtp:
+  host: ""
+  port: 587
+  from: ""
+  # Turn off only for a test relay. The relay must offer TLS.
+  tls: true
+
 ingress:
   enabled: true
   className: nginx
@@ -101,6 +115,15 @@ externalSecrets:
     POSTGRES_USER: ""
     POSTGRES_PASSWORD: ""
     REDIS_PASSWORD: ""
+  worker:
+    POSTGRES_USER: ""
+    POSTGRES_PASSWORD: ""
+    # Add these when s3.bucket is set, so the purge job can delete files:
+    # S3_ACCESS_KEY_ID: ""
+    # S3_SECRET_ACCESS_KEY: ""
+    # Add these when the relay needs a login:
+    # SMTP_USER: ""
+    # SMTP_PASSWORD: ""
 
 networkPolicy:
   # Labels that select the namespace of the cluster's ingress controller.
@@ -115,3 +138,6 @@ networkPolicy:
   s3To: []
   s3Port: 443
   clamdTo: []
+  # Where the worker reaches the mail relay, and the port it listens on. The worker also reaches PostgreSQL and the object store.
+  smtpTo: []
+  smtpPort: 587

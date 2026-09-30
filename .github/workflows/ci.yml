@@ -17,6 +17,7 @@ jobs:
       - run: pnpm --filter @miroclone/web build
       - run: pnpm --filter @miroclone/api bundle
       - run: pnpm --filter @miroclone/collab bundle
+      - run: pnpm --filter @miroclone/worker bundle
   chart:
     runs-on: ubuntu-latest
     steps:
@@ -33,6 +34,7 @@ jobs:
         include:
           - { name: api, file: docker/service.Dockerfile, args: "SERVICE=api" }
           - { name: collab, file: docker/service.Dockerfile, args: "SERVICE=collab" }
+          - { name: worker, file: docker/service.Dockerfile, args: "SERVICE=worker" }
           - { name: web, file: docker/web.Dockerfile, args: "" }
     steps:
       - uses: actions/checkout@v4

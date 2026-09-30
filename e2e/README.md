@@ -51,3 +51,11 @@ The last step stops the fake store and scanner, so restart them before you run i
 The script `offline.mjs` needs the full-stack setup. It stops and restarts the collaboration service,
 so set `COLLAB_PID_FILE` to a file that holds the process ID of the running service, and `COLLAB_DIR`
 to `services/collab`.
+
+## Comments test
+
+The script `comments.mjs` needs the full-stack setup and the SMTP sink
+(`pnpm --filter @miroclone/worker smtp-sink`). Run it from the repository root, because it starts two
+worker processes from `services/worker`. It checks mention suggestions, pins, in-app notifications,
+email content, replies, resolving, viewer limits, and that two workers send each email once. It
+deletes all rows in `notifications`, so use a test database.

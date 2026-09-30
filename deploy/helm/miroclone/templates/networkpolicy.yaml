@@ -63,7 +63,7 @@ spec:
     {{- if not .Values.networkPolicy.entraEgressCidrs }}
     []
     {{- end }}
-{{- range $name := list "api" "collab" }}
+{{- range $name := list "api" "collab" "worker" }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -115,5 +115,31 @@ spec:
         - { port: {{ $.Values.clamd.port }}, protocol: TCP }
     {{- end }}
     {{- if not (or .Values.networkPolicy.s3To .Values.networkPolicy.clamdTo) }}
+    []
+    {{- end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: worker-egress-services
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: worker
+  policyTypes: [Egress]
+  egress:
+    {{- with .Values.networkPolicy.smtpTo }}
+    - to:
+        {{- toYaml . | nindent 8 }}
+      ports:
+        - { port: {{ $.Values.networkPolicy.smtpPort }}, protocol: TCP }
+    {{- end }}
+    {{- with .Values.networkPolicy.s3To }}
+    - to:
+        {{- toYaml . | nindent 8 }}
+      ports:
+        - { port: {{ $.Values.networkPolicy.s3Port }}, protocol: TCP }
+    {{- end }}
+    {{- if not (or .Values.networkPolicy.smtpTo .Values.networkPolicy.s3To) }}
     []
     {{- end }}
