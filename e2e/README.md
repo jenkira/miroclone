@@ -59,3 +59,11 @@ The script `comments.mjs` needs the full-stack setup and the SMTP sink
 worker processes from `services/worker`. It checks mention suggestions, pins, in-app notifications,
 email content, replies, resolving, viewer limits, and that two workers send each email once. It
 deletes all rows in `notifications`, so use a test database.
+
+## History and search test
+
+The script `history.mjs` needs the full-stack setup. Run it from the repository root, because it starts
+two workers from `services/worker`: one for search indexing and one for automatic versions. Free ports
+8093 and 8094 first. A worker left over from an earlier run holds them. Set `WORKER_LOG_DIR` to a
+directory to keep each worker's output. The test gives each board a unique title, so boards from
+earlier runs don't affect it.

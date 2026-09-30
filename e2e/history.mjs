@@ -1,6 +1,7 @@
 // Version history and search (BRD-6, BRD-4) against the full stack. Run it from the repository root: it starts workers.
 import { chromium } from "playwright-core";
 import { execSync, spawn } from "node:child_process";
+import { openSync } from "node:fs";
 
 const APP = "http://127.0.0.1:5199", IDP = "http://127.0.0.1:4010";
 const res = [];
@@ -8,7 +9,11 @@ const check = (n, ok, x = "") => { res.push(ok); console.log(`${ok ? "PASS" : "F
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const sql = (q) => execSync(`psql -h ${process.env.POSTGRES_HOST} -p ${process.env.POSTGRES_PORT ?? 5432} -U ${process.env.POSTGRES_USER} -d ${process.env.POSTGRES_DB} -qAt -c "${q}"`, { env: { ...process.env, PGPASSWORD: process.env.POSTGRES_PASSWORD } }).toString().trim();
 const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH ?? "/opt/pw-browsers/chromium", args: ["--use-gl=swiftshader", "--enable-unsafe-swiftshader", "--no-sandbox"] });
-const startWorker = (port) => spawn("pnpm", ["start"], { cwd: "services/worker", env: { ...process.env, PORT: String(port) }, stdio: "ignore", detached: true });
+// Set WORKER_LOG_DIR to keep each worker's output, which helps when a job doesn't run.
+const startWorker = (port) => {
+  const out = process.env.WORKER_LOG_DIR ? openSync(`${process.env.WORKER_LOG_DIR}/worker-${port}.log`, "w") : "ignore";
+  return spawn("pnpm", ["start"], { cwd: "services/worker", env: { ...process.env, PORT: String(port) }, stdio: ["ignore", out, out], detached: true });
+};
 const stop = (w) => { try { process.kill(-w.pid); } catch { /* gone */ } };
 
 async function login(user) {
@@ -22,6 +27,12 @@ async function login(user) {
   return { ctx, page };
 }
 const texts = (page) => page.evaluate(() => window.__board.list().map((o) => o.text).sort());
+/** Waits until the server has acknowledged every change, so leaving the page can't drop an edit. Returns the wait in ms. */
+const flushed = async (page) => {
+  const t = Date.now();
+  await page.waitForFunction(() => window.__provider && window.__provider.unsyncedChanges === 0, null, { timeout: 15000 });
+  return Date.now() - t;
+};
 const until = async (fn, ms = 20000) => { const end = Date.now() + ms; while (Date.now() < end) { if (await fn()) return true; await wait(300); } return false; };
 
 // A unique title per run, so boards left by earlier runs can't be mistaken for this one.
@@ -90,11 +101,15 @@ check("and the API refuses a viewer", api[0] === 403 && api[1] === 403, JSON.str
 
 // 4. Search: by content, by title, with access control
 await ann.page.evaluate(() => window.__board.restoreObjects([{ id: "k1", type: "sticky", x: 0, y: 0, width: 100, height: 100, rotation: 0, index: "a0", locked: false, text: "Kestrel launch checklist", color: "#fff475" }]));
-await wait(800);
+console.log("  (Ann's edit acknowledged by the server after", await flushed(ann.page), "ms)");
 await ann.page.goto(APP + "/");
 const search = async (page, q) => { await page.getByLabel("Search boards").fill(q); await wait(700); return page.getByRole("region", { name: "Search results" }); };
 let found = false;
 for (let i = 0; i < 12 && !found; i++) { const r = await search(ann.page, "kestrel"); found = (await r.getByRole("link", { name: TITLE }).count()) > 0; if (!found) await wait(2000); }
+if (!found) {
+  await ann.page.screenshot({ path: process.env.SHOT_DIR ? `${process.env.SHOT_DIR}/history-search-fail.png` : "history-search-fail.png" });
+  console.log("  dashboard text:", (await ann.page.locator("body").textContent()).replace(/\s+/g, " ").slice(0, 300));
+}
 check("search finds a board by its text", found);
 const hitText = await ann.page.getByRole("region", { name: "Search results" }).textContent();
 check("the match is highlighted in the snippet", (await ann.page.locator("mark", { hasText: /kestrel/i }).count()) > 0, hitText.slice(0, 80));
@@ -111,12 +126,22 @@ check("hostile search text is handled safely", xss === 200 && Number(sql("select
 // 5. Search follows edits
 await ann.page.goto(`${APP}/#/board/${boardId}`);
 await ann.page.waitForFunction(() => window.__board);
+// Wait for the connection first. An edit made before it opens is kept in the browser and sent on the next visit.
+await ann.page.getByText("Saved automatically").waitFor();
+await ann.page.waitForFunction(() => window.__provider.synced === true, null, { timeout: 15000 });
+const updatesBefore = Number(sql(`SELECT count(*) FROM board_updates WHERE board_id = '${boardId}'`));
 await ann.page.evaluate(() => window.__board.add({ type: "sticky", text: "Zebra crossing review" }));
-await wait(1000);
+await flushed(ann.page);
+await wait(500);
+console.log("  stored updates before/after the zebra edit:", updatesBefore, Number(sql(`SELECT count(*) FROM board_updates WHERE board_id = '${boardId}'`)), "| board updated_at:", sql(`SELECT to_char(updated_at,'HH24:MI:SS') FROM boards WHERE id = '${boardId}'`), "| now:", sql("SELECT to_char(now(),'HH24:MI:SS')"));
 await ann.page.goto(APP + "/");
 let z = false; const t0 = Date.now();
 while (!z && Date.now() - t0 < 60000) { const r = await search(ann.page, "zebra"); z = (await r.getByRole("link", { name: TITLE }).count()) > 0; if (!z) await wait(2000); }
 const secs = Math.round((Date.now() - t0) / 1000);
+if (!z) {
+  await ann.page.screenshot({ path: process.env.SHOT_DIR ? `${process.env.SHOT_DIR}/history-zebra-fail.png` : "history-zebra-fail.png" });
+  console.log("  url:", ann.page.url(), "| box value:", await ann.page.getByLabel("Search boards").inputValue().catch((e) => "n/a " + e.message.slice(0, 50)));
+}
 check("a new edit becomes searchable within 30 seconds", z && secs <= 30, `${secs} s`);
 
 // 6. A user who can't open the board finds nothing. Use a board only Ann owns, and search as Bob after removing him.
