@@ -37,11 +37,33 @@ spec:
     matchLabels:
       app.kubernetes.io/part-of: miroclone
   policyTypes: [Ingress]
+  # The ingress controller reaches the application ports only. It has no route to the metrics port or to the worker.
   ingress:
     - from:
         - namespaceSelector:
             matchLabels:
               {{- toYaml .Values.networkPolicy.ingressNamespaceLabels | nindent 14 }}
+      ports:
+        - { port: {{ .Values.services.web.port }}, protocol: TCP }
+        - { port: {{ .Values.services.api.port }}, protocol: TCP }
+        - { port: {{ .Values.services.collab.port }}, protocol: TCP }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-monitoring
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/part-of: miroclone
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.monitoringNamespaceLabels | nindent 14 }}
+      ports:
+        - { port: {{ .Values.monitoring.metricsPort }}, protocol: TCP }
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -143,3 +165,20 @@ spec:
     {{- if not (or .Values.networkPolicy.smtpTo .Values.networkPolicy.s3To) }}
     []
     {{- end }}
+{{- if and .Values.tracing.endpoint .Values.networkPolicy.otlpTo }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: egress-traces
+spec:
+  podSelector:
+    matchExpressions:
+      - { key: app.kubernetes.io/name, operator: In, values: [api, collab] }
+  policyTypes: [Egress]
+  egress:
+    - to:
+        {{- toYaml .Values.networkPolicy.otlpTo | nindent 8 }}
+      ports:
+        - { port: {{ .Values.networkPolicy.otlpPort }}, protocol: TCP }
+{{- end }}

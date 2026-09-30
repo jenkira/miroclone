@@ -1,7 +1,8 @@
 import Fastify from "fastify";
 import cookie from "@fastify/cookie";
 import { validateClaims, type EntraClaims } from "@miroclone/shared";
-import { sealTokens } from "@miroclone/server-core";
+import { sealTokens, type Registry, type Tracing } from "@miroclone/server-core";
+import { observe } from "./observability.js";
 import type { GraphClient } from "./graph.js";
 import type { ObjectStore } from "@miroclone/server-core";
 import type { Scanner } from "./scanner.js";
@@ -22,6 +23,9 @@ export interface AppOptions {
   secureCookies?: boolean;
   exportPolicy?: ExportPolicy;
   graph: GraphClient;
+  /** Metrics registry and tracing (section 8.6). Both are optional. */
+  registry?: Registry;
+  tracing?: Tracing;
   /** Object storage and scanner for file uploads. Uploads are refused unless both exist. */
   store?: ObjectStore;
   scanner?: Scanner;
@@ -32,6 +36,7 @@ export interface AppOptions {
 
 export function buildApp(opts: AppOptions) {
   const app = Fastify({ logger: true });
+  const metrics = observe(app, { registry: opts.registry, tracing: opts.tracing });
   app.register(cookie);
   const secure = opts.secureCookies ?? true;
   const cookieOpts = { httpOnly: true, secure, sameSite: "lax" as const, path: "/" };
@@ -68,12 +73,14 @@ export function buildApp(opts: AppOptions) {
       ({ claims, tokens } = await opts.oidc.exchange({ code, codeVerifier: tx.codeVerifier, nonce: tx.nonce }));
     } catch (err) {
       req.log.warn({ err }, "token exchange failed");
+      metrics.signIns.inc({ result: "token" });
       audit({ action: "sign_in", actor: "unknown", detail: { allowed: false, reason: "token" } });
       return reply.code(401).send({ error: "token_invalid" });
     }
 
     const result = validateClaims(claims, { tenantId: opts.tenantId });
     if (!result.ok) {
+      metrics.signIns.inc({ result: result.reason });
       audit({ action: "sign_in", actor: claims.oid ?? "unknown", detail: { allowed: false, reason: result.reason } });
       return reply.code(403).send({ error: result.reason });
     }
@@ -83,6 +90,7 @@ export function buildApp(opts: AppOptions) {
       try { groups = await opts.graph.memberGroups(tokens.accessToken); }
       catch (err) {
         req.log.error({ err }, "group overage lookup failed");
+        metrics.signIns.inc({ result: "groups" });
         return reply.code(503).send({ error: "groups_unavailable" });
       }
     }
@@ -100,6 +108,7 @@ export function buildApp(opts: AppOptions) {
       groups,
       graph: sealTokens(tokens, opts.tokenKey),
     });
+    metrics.signIns.inc({ result: "allowed" });
     audit({ action: "sign_in", actor: claims.oid, detail: { allowed: true } });
     reply.setCookie(SESSION_COOKIE, session.id, cookieOpts);
     return reply.redirect("/");
@@ -119,5 +128,5 @@ export function buildApp(opts: AppOptions) {
   });
 
   boardRoutes(app, opts);
-  return app;
+  return Object.assign(app, { metrics });
 }

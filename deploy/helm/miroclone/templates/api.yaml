@@ -17,7 +17,11 @@
 {{- $env = append $env (dict "name" "CLAMD_HOST" "value" .Values.clamd.host) }}
 {{- $env = append $env (dict "name" "CLAMD_PORT" "value" (toString .Values.clamd.port)) }}
 {{- end }}
+{{- $env = append $env (dict "name" "METRICS_PORT" "value" (toString .Values.monitoring.metricsPort)) }}
+{{- if .Values.tracing.endpoint }}
+{{- $env = append $env (dict "name" "OTEL_EXPORTER_OTLP_ENDPOINT" "value" .Values.tracing.endpoint) }}
+{{- end }}
 {{- if .Values.tls.caConfigMap }}
 {{- $env = append $env (dict "name" "NODE_EXTRA_CA_CERTS" "value" (printf "/etc/miroclone/ca/%s" .Values.tls.caKey)) }}
 {{- end -}}
-{{ include "miroclone.workload" (dict "root" $ "name" "api" "svc" .Values.services.api "env" $env "secret" true "caConfigMap" .Values.tls.caConfigMap "probePath" "/healthz" "readyPath" "/readyz") }}
+{{ include "miroclone.workload" (dict "root" $ "name" "api" "svc" .Values.services.api "env" $env "secret" true "metrics" true "caConfigMap" .Values.tls.caConfigMap "probePath" "/healthz" "readyPath" "/readyz") }}

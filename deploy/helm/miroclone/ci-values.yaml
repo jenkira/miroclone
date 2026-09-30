@@ -4,6 +4,7 @@ postgres: { host: "pg-rw.data.svc" }
 redis: { host: "redis.data.svc" }
 ingress: { host: "board.example.internal" }
 networkPolicy:
+  otlpTo: [{ podSelector: { matchLabels: { app: otel-collector } } }]
   entraEgressCidrs: ["10.0.0.0/24"]
   postgresTo: [{ podSelector: { matchLabels: { "cnpg.io/cluster": pg } } }]
   redisTo: [{ podSelector: { matchLabels: { app: redis } } }]
@@ -18,3 +19,5 @@ externalSecrets:
   api: { S3_ACCESS_KEY_ID: "106", S3_SECRET_ACCESS_KEY: "107", ENTRA_CLIENT_SECRET: "101", SESSION_ENCRYPTION_KEY: "105", POSTGRES_USER: "102", POSTGRES_PASSWORD: "103", REDIS_PASSWORD: "104" }
   collab: { POSTGRES_USER: "102", POSTGRES_PASSWORD: "103", REDIS_PASSWORD: "104" }
   worker: { POSTGRES_USER: "102", POSTGRES_PASSWORD: "103", S3_ACCESS_KEY_ID: "106", S3_SECRET_ACCESS_KEY: "107" }
+monitoring: { enabled: true }
+tracing: { endpoint: "http://otel-collector.observability.svc:4318" }

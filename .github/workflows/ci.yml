@@ -27,6 +27,37 @@ jobs:
       - run: helm template miroclone deploy/helm/miroclone -f deploy/helm/miroclone/ci-values.yaml > /tmp/rendered.yaml
       - name: Check that the rendered chart names no secret values
         run: "! grep -Ei 'password: |client_secret: ' /tmp/rendered.yaml"
+      - name: Check the rendered documents and the metrics port
+        run: |
+          pip install pyyaml
+          python3 - <<'PY'
+          import json, yaml
+          docs = [d for d in yaml.safe_load_all(open("/tmp/rendered.yaml")) if d]
+          kinds = {d["kind"] for d in docs}
+          print(sorted(kinds))
+          for k in ("PodMonitor", "PrometheusRule", "ConfigMap", "NetworkPolicy", "Deployment", "Service", "ExternalSecret"):
+              assert k in kinds, f"missing {k}"
+          # The metrics port must never be on a Service, so the ingress can't route to it.
+          for d in docs:
+              if d["kind"] == "Service":
+                  for p in d["spec"]["ports"]:
+                      assert p["port"] != 9464, f"{d['metadata']['name']} exposes the metrics port"
+          # Every workload with a metrics port sets METRICS_PORT to match.
+          for d in docs:
+              if d["kind"] == "Deployment":
+                  c = d["spec"]["template"]["spec"]["containers"][0]
+                  ports = {p["name"]: p["containerPort"] for p in c["ports"]}
+                  env = {e["name"]: e.get("value") for e in c.get("env", [])}
+                  if d["metadata"]["name"] != "web":
+                      assert ports.get("metrics") == 9464 and env.get("METRICS_PORT") == "9464", d["metadata"]["name"]
+                  sc = c["securityContext"]
+                  assert sc["readOnlyRootFilesystem"] and not sc["allowPrivilegeEscalation"] and sc["capabilities"]["drop"] == ["ALL"]
+          # The dashboard in the ConfigMap is valid JSON.
+          cm = next(d for d in docs if d["kind"] == "ConfigMap" and d["metadata"]["name"] == "miroclone-dashboard")
+          dash = json.loads(cm["data"]["miroclone-overview.json"])
+          assert len(dash["panels"]) >= 10
+          print("ok")
+          PY
   images:
     runs-on: ubuntu-latest
     strategy:

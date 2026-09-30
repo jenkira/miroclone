@@ -1,0 +1,105 @@
+{{- if .Values.monitoring.enabled }}
+# Works with Rancher Monitoring, which runs the Prometheus Operator (PRD section 8.6).
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: miroclone
+  labels:
+    {{- toYaml .Values.monitoring.labels | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/part-of: miroclone
+  podMetricsEndpoints:
+    - port: metrics
+      path: /metrics
+      interval: {{ .Values.monitoring.interval }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: miroclone
+  labels:
+    {{- toYaml .Values.monitoring.labels | nindent 4 }}
+spec:
+  groups:
+    - name: miroclone.availability
+      rules:
+        - alert: MirocloneServiceDown
+          expr: sum by (deployment) (kube_deployment_status_replicas_available{namespace="{{ .Release.Namespace }}", deployment=~"web|api|collab"}) < 1
+          for: 5m
+          labels: { severity: critical }
+          annotations:
+            summary: "No {{ "{{ $labels.deployment }}" }} pod is available"
+            description: "Users can't use Miroclone while this service has no ready pod."
+        - alert: MirocloneApiErrors
+          expr: sum(rate(http_request_duration_seconds_count{service="api",status=~"5.."}[5m])) / sum(rate(http_request_duration_seconds_count{service="api"}[5m])) > 0.05
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: "More than 5% of API requests fail"
+        - alert: MirocloneApiSlow
+          expr: histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket{service="api"}[5m]))) > 1
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: "The slowest 5% of API requests take over a second"
+    - name: miroclone.collaboration
+      rules:
+        - alert: MirocloneCollabPersistErrors
+          expr: increase(collab_persist_errors_total[10m]) > 0
+          for: 0m
+          labels: { severity: critical }
+          annotations:
+            summary: "Board updates can't be stored"
+            description: "Edits may be lost if the pod restarts. Check the database."
+        - alert: MirocloneCollabSlowStorage
+          expr: histogram_quantile(0.95, sum by (le) (rate(collab_persist_seconds_bucket[5m]))) > 0.5
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: "Storing a board update takes over half a second"
+            description: "The sync target is 200 ms at the 95th percentile (PRF-3)."
+        - alert: MirocloneNearConnectionLimit
+          expr: sum(collab_connections) > 1800
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: "Connections are above 90% of the 2,000 user target (PRF-6)"
+    - name: miroclone.security
+      rules:
+        - alert: MirocloneSignInDenials
+          expr: sum(rate(miroclone_sign_in_total{result!="allowed"}[10m])) * 60 > 10
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: "More than 10 sign-ins a minute are refused"
+            description: "Check the audit log. Causes include a missing MFA claim, a missing app role, and a wrong tenant."
+    - name: miroclone.worker
+      rules:
+        - alert: MirocloneWorkerJobFailing
+          expr: increase(worker_job_runs_total{result="error"}[30m]) > 3
+          for: 0m
+          labels: { severity: warning }
+          annotations:
+            summary: "A worker job keeps failing: {{ "{{ $labels.job }}" }}"
+        - alert: MirocloneEmailsFailing
+          expr: increase(worker_emails_total{result="failed"}[1h]) > 5
+          for: 0m
+          labels: { severity: warning }
+          annotations:
+            summary: "Notification emails are failing. Check the mail relay."
+---
+# Rancher Monitoring's Grafana loads any ConfigMap with this label.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: miroclone-dashboard
+  labels:
+    grafana_dashboard: "1"
+  annotations:
+    grafana_folder: Miroclone
+data:
+  miroclone-overview.json: |-
+    {{- .Files.Get "files/dashboards/miroclone.json" | nindent 4 }}
+{{- end }}

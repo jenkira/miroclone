@@ -16,7 +16,8 @@
 {{- $env = append $env (dict "name" "SMTP_TLS" "value" (ternary "1" "0" .Values.smtp.tls)) }}
 {{- $env = append $env (dict "name" "APP_URL" "value" (printf "https://%s" (required "Set ingress.host" .Values.ingress.host))) }}
 {{- end }}
+{{- $env = append $env (dict "name" "METRICS_PORT" "value" (toString .Values.monitoring.metricsPort)) }}
 {{- if .Values.tls.caConfigMap }}
 {{- $env = append $env (dict "name" "NODE_EXTRA_CA_CERTS" "value" (printf "/etc/miroclone/ca/%s" .Values.tls.caKey)) }}
 {{- end -}}
-{{ include "miroclone.workload" (dict "root" $ "name" "worker" "svc" .Values.services.worker "env" $env "secret" true "caConfigMap" .Values.tls.caConfigMap "probePath" "/healthz") }}
+{{ include "miroclone.workload" (dict "root" $ "name" "worker" "svc" .Values.services.worker "env" $env "secret" true "metrics" true "caConfigMap" .Values.tls.caConfigMap "probePath" "/healthz") }}

@@ -125,12 +125,31 @@ externalSecrets:
     # SMTP_USER: ""
     # SMTP_PASSWORD: ""
 
+# Metrics, alerts, and the dashboard for Rancher Monitoring (PRD section 8.6). They need the Prometheus Operator.
+monitoring:
+  enabled: false
+  # Every service serves /metrics on this port. The Service and the ingress never route to it.
+  metricsPort: 9464
+  interval: 30s
+  # Labels that your Prometheus uses to pick up PodMonitors and rules. Rancher Monitoring accepts any.
+  labels: {}
+
+# Traces go to an OpenTelemetry collector in the cluster. Leave empty to turn tracing off, and nothing is sent.
+tracing:
+  endpoint: ""
+
 networkPolicy:
   # Labels that select the namespace of the cluster's ingress controller.
   ingressNamespaceLabels:
     kubernetes.io/metadata.name: kube-system
   # Entra ID and Microsoft Graph, usually through the egress proxy. List the proxy or address ranges.
   entraEgressCidrs: []
+  # Labels that select the namespace where Prometheus runs. Only it can reach the metrics port.
+  monitoringNamespaceLabels:
+    kubernetes.io/metadata.name: cattle-monitoring-system
+  # Where traces go. Needed only when tracing.endpoint is set.
+  otlpTo: []
+  otlpPort: 4318
   # Raw "to" entries for NetworkPolicy egress rules.
   postgresTo: []
   redisTo: []

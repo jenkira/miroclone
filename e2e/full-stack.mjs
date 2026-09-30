@@ -112,6 +112,17 @@ check("audit log records the refused sign-ins", [...new Set(log.filter((e) => e.
 const pc = log.filter((e) => e.action === "export").at(-1);
 check("export audit event carries the classification", pc?.detail?.classification === "PROTECTED" && pc?.detail?.format === "png");
 
+// 9b. Metrics (section 8.6). Set API_METRICS_URL and COLLAB_METRICS_URL to check them.
+if (process.env.API_METRICS_URL) {
+  const val = (text, name, labels) => { for (const l of text.split("\n")) { if (l.startsWith(name + "{") && Object.entries(labels).every(([k, v]) => l.includes(`${k}="${v}"`))) return Number(l.slice(l.lastIndexOf(" ") + 1)); } return 0; };
+  const api = await (await fetch(process.env.API_METRICS_URL)).text();
+  check("the API counts sign-ins by outcome", val(api, "miroclone_sign_in_total", { result: "allowed" }) >= 2 && val(api, "miroclone_sign_in_total", { result: "mfa" }) >= 1 && val(api, "miroclone_sign_in_total", { result: "role" }) >= 1);
+  check("request timings use route patterns, never board IDs", val(api, "http_request_duration_seconds_count", { route: "/api/boards/:id", status: "200" }) >= 1 && !api.includes(boardId));
+  const collab = await (await fetch(process.env.COLLAB_METRICS_URL)).text();
+  check("the collaboration service counts allowed and read-only connections", val(collab, "collab_auth_total", { result: "allowed" }) >= 1 && val(collab, "collab_auth_total", { result: "allowed_readonly" }) >= 1);
+  check("and the size of each update", val(collab, "collab_update_bytes_count", {}) >= 1 || /collab_update_bytes_count\{[^}]*\} [1-9]/.test(collab));
+}
+
 // 10. Sign out ends the session
 await ann.page.goto(APP + "/");
 await ann.page.getByRole("button", { name: "Sign out" }).click();

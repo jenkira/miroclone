@@ -8,3 +8,5 @@ export * from "./persistence.js";
 export * from "./tokens.js";
 export * from "./objectstore.js";
 export * from "./purge.js";
+export * from "./metrics.js";
+export * from "./tracing.js";

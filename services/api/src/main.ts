@@ -6,7 +6,7 @@ import { S3ObjectStore } from "@miroclone/server-core";
 import { ClamdScanner } from "./scanner.js";
 import { EntraOidcClient } from "./oidc.js";
 import { Redis } from "ioredis";
-import { defaultSessionPolicy, parseKey, RedisSessionStore, SessionManager } from "@miroclone/server-core";
+import { createRegistry, initTracing, serveMetrics, defaultSessionPolicy, parseKey, RedisSessionStore, SessionManager } from "@miroclone/server-core";
 
 function required(name: string): string {
   const v = process.env[name];
@@ -35,7 +35,11 @@ const db = new pg.Pool({
 await migrate(db);
 
 const redis = new Redis({ host: required("REDIS_HOST"), port: process.env.REDIS_PORT ? Number(process.env.REDIS_PORT) : 6379, password: process.env.REDIS_PASSWORD });
+const registry = createRegistry("api");
+const tracing = initTracing("miroclone-api");
 const app = buildApp({
+  registry,
+  tracing,
   tenantId,
   oidc,
   db,
@@ -56,6 +60,8 @@ const app = buildApp({
   sessions: new SessionManager(new RedisSessionStore(redis, defaultSessionPolicy.maxLifetimeSeconds)),
   secureCookies: process.env.INSECURE_COOKIES !== "1",
 });
+// Metrics use their own port. The Service and the ingress never route to it.
+const metricsServer = serveMetrics(registry, Number(process.env.METRICS_PORT ?? 9464));
 await app.listen({ port: Number(process.env.PORT ?? 3000), host: "0.0.0.0" });
 
-process.once("SIGTERM", async () => { await app.close(); await db.end(); redis.disconnect(); process.exit(0); });
+process.once("SIGTERM", async () => { metricsServer.close(); await tracing.shutdown(); await app.close(); await db.end(); redis.disconnect(); process.exit(0); });

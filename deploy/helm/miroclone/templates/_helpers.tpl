@@ -9,7 +9,7 @@ app.kubernetes.io/part-of: miroclone
 
 {{/*
 One workload: a Deployment and a Service. Parameters: root, name, svc, env (list of name/value maps),
-secret (bool), caConfigMap (optional), probePath (empty for a TCP probe), preStop (bool).
+secret (bool), caConfigMap (optional), metrics (bool), probePath (empty for a TCP probe), preStop (bool).
 */}}
 {{- define "miroclone.workload" -}}
 {{- $root := .root -}}
@@ -50,6 +50,11 @@ spec:
           ports:
             - name: http
               containerPort: {{ .svc.port }}
+            {{- if .metrics }}
+            # Metrics use their own port. The Service doesn't list it, so the ingress can't reach it.
+            - name: metrics
+              containerPort: {{ $root.Values.monitoring.metricsPort }}
+            {{- end }}
           {{- if .env }}
           env:
             {{- toYaml .env | nindent 12 }}

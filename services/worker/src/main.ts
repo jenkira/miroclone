@@ -1,6 +1,6 @@
 import { createServer } from "node:http";
 import pg from "pg";
-import { indexStaleBoards, migrate, pruneAutoVersions, purgeExpiredBoards, S3ObjectStore, snapshotChangedBoards } from "@miroclone/server-core";
+import { Counter, createRegistry, Histogram, LATENCY_BUCKETS, serveMetrics, indexStaleBoards, migrate, pruneAutoVersions, purgeExpiredBoards, S3ObjectStore, snapshotChangedBoards } from "@miroclone/server-core";
 import { sendPendingEmails, type Mailer } from "./email.js";
 import { SmtpMailer } from "./smtp.js";
 
@@ -45,11 +45,26 @@ const mailer: Mailer | undefined = process.env.SMTP_HOST
   : undefined;
 const appUrl = process.env.APP_URL;
 
+const registry = createRegistry("worker");
+const jobRuns = new Counter({ name: "worker_job_runs_total", help: "Job runs by job and result", labelNames: ["job", "result"], registers: [registry] });
+const jobSeconds = new Histogram({ name: "worker_job_duration_seconds", help: "Job duration", labelNames: ["job"], buckets: LATENCY_BUCKETS, registers: [registry] });
+const emails = new Counter({ name: "worker_emails_total", help: "Notification emails by result", labelNames: ["result"], registers: [registry] });
+// Metrics use their own port, apart from the health endpoint.
+const metricsServer = serveMetrics(registry, Number(process.env.METRICS_PORT ?? 9464));
+
 let running = true;
 const every = (name: string, ms: number, job: () => Promise<unknown>) => {
   const tick = async () => {
-    try { const r = (await job()) as Record<string, number> | undefined; if (r && Object.values(r).some((n) => n > 0)) log(name, r); }
-    catch (err) { console.error(JSON.stringify({ level: "error", msg: `${name} failed`, err: String(err) })); }
+    const end = jobSeconds.startTimer({ job: name });
+    try {
+      const r = (await job()) as Record<string, number> | undefined;
+      jobRuns.inc({ job: name, result: "ok" });
+      if (name === "emails" && r) for (const k of ["sent", "failed", "skipped"]) if (r[k]) emails.inc({ result: k }, r[k]);
+      if (r && Object.values(r).some((n) => n > 0)) log(name, r);
+    } catch (err) {
+      jobRuns.inc({ job: name, result: "error" });
+      console.error(JSON.stringify({ level: "error", msg: `${name} failed`, err: String(err) }));
+    } finally { end(); }
   };
   void tick();
   return setInterval(() => { if (running) void tick(); }, ms);
@@ -73,6 +88,7 @@ process.once("SIGTERM", async () => {
   running = false;
   timers.forEach(clearInterval);
   health.close();
+  metricsServer.close();
   await db.end();
   process.exit(0);
 });
