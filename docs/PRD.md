@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Status | Draft for review |
-| Version | 0.6 |
+| Version | 0.7 |
 | Date | 30 September 2026 |
 | Owner | To be confirmed |
 | Working name | Miroclone |
@@ -38,6 +38,7 @@ Table 1. Change history
 | 0.4 | 30 September 2026 | Made object storage configurable for any S3-compatible store, allowed cleared guest users, and switched secrets to the platform team's existing Passwordstate operator. |
 | 0.5 | 30 September 2026 | Named External Secrets Operator (ESO) as the Passwordstate sync operator and defined how the Helm chart requests secrets. |
 | 0.6 | 30 September 2026 | Added section 8.5.1 on connecting ESO to Passwordstate through the ESO webhook provider, and narrowed Q16. |
+| 0.7 | 30 September 2026 | Recorded implementation decisions: the session encryption key replaces the session signing key in section 8.5, the collaboration route hashes on the URL path in section 8.4, and the API stores the signed-in user's Graph tokens in the session (section 8.3). Added a risk for those tokens. |
 
 ## 2. Background and research
 
@@ -456,7 +457,13 @@ The sign-in flow works as follows:
 
 The API service uses delegated Microsoft Graph permissions
 (`User.ReadBasic.All` and `GroupMember.Read.All`) for the people picker and
-group resolution. These permissions need tenant administrator consent.
+group resolution, and the `offline_access` scope to refresh the token. These
+permissions need tenant administrator consent.
+
+The API service keeps the user's Graph access and refresh tokens on the server,
+in the session store, and never sends them to the browser. It encrypts them
+with the session encryption key (section 8.5), refreshes the access token
+before it expires, and stores session IDs in Redis only as hashes.
 
 Entra ID is a cloud service, so the API service needs outbound HTTPS access to
 `login.microsoftonline.com` and `graph.microsoft.com`, usually through the
@@ -473,8 +480,9 @@ characteristics:
   Gateway API routes. TLS certificates come from cert-manager, using the
   organisation's internal certificate authority.
 - The route for the collaboration service supports WebSockets, allows idle
-  timeouts of at least 1 hour, and uses consistent hashing on board ID, so
-  users of the same board usually reach the same pod.
+  timeouts of at least 1 hour, and uses consistent hashing on the URL path,
+  which ends in the board ID (`/collab/<board ID>`), so users of the same
+  board usually reach the same pod.
 - Runs on RKE2 clusters that use the CIS hardening profile, with Pod Security
   Admission set to `restricted`, and with SELinux enforcing.
 - Runs containers as non-root, with read-only root file systems, no
@@ -523,7 +531,8 @@ The chart meets the following secrets requirements:
 The product needs the following secrets:
 
 - The Entra ID client secret or certificate for the API service.
-- The session signing key for the API and collaboration services.
+- The session encryption key for the API service. It encrypts the Microsoft Graph
+  tokens that the API keeps in the session store (section 8.3).
 - PostgreSQL credentials for the API, collaboration, and worker services.
 - Redis credentials for the API, collaboration, and worker services.
 - Object storage access keys for the API and worker services.
@@ -682,6 +691,7 @@ Table 15. Risks and mitigations
 | The chosen object store gets no security fixes. For example, MinIO's community edition was archived in February 2026. | An unpatched store fails ISM patching controls and blocks authorisation. | Choose a supported, patched S3-compatible store before general availability (Q14). The product works with any S3-compatible store, so the choice doesn't affect the design. |
 | The ESO store's Passwordstate credential can read the product's secrets, and the Kubernetes Secrets that ESO creates hold the values in the cluster. | Anyone who reads the credential or the Secrets can read the product's secrets. | Scope the store's credential to the product's password list, limit which accounts can read Secrets in the product's namespace, and turn on encryption at rest for Secrets in RKE2. |
 | The `Whiteboard.User` app role acts as the clearance check for staff and guests (IAM-11 and IAM-12). | An uncleared user or guest who gets the role can open PROTECTED boards. | Assign the role only through a group that the security team controls, and review its membership regularly. |
+| The session store holds each user's Graph refresh token. | A read of Redis, with the session encryption key, exposes delegated access to the directory for the session's lifetime. | Encrypt the tokens with a key from Passwordstate, key Redis entries by a hash of the session ID, require Redis authentication and TLS, and expire entries at the session's maximum lifetime (IAM-10). |
 | Miro content converts poorly. | Teams lose work or trust in the product. | Produce a report for each board (MIG-4). Run a trial migration on sample boards before bulk migration. |
 | Canvas apps are hard to make accessible. | Fails the WCAG requirement for some users. | Design keyboard and screen reader support from R1, and schedule an audit in R2. |
 | Entra configuration needs tenant administrator time. | Blocks R0 sign-in work. | Request the app registration, app roles, conditional access policy, and Graph consent at project start. |
