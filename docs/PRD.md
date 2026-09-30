@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Status | Draft for review |
-| Version | 0.5 |
+| Version | 0.6 |
 | Date | 30 September 2026 |
 | Owner | To be confirmed |
 | Working name | Miroclone |
@@ -37,6 +37,7 @@ Table 1. Change history
 | 0.3 | 30 September 2026 | Recorded answers to Q8 to Q11: both marking frameworks, all Entra users cleared, offline caching allowed, and MinIO for object storage. Set Passwordstate as the secrets repository. |
 | 0.4 | 30 September 2026 | Made object storage configurable for any S3-compatible store, allowed cleared guest users, and switched secrets to the platform team's existing Passwordstate operator. |
 | 0.5 | 30 September 2026 | Named External Secrets Operator (ESO) as the Passwordstate sync operator and defined how the Helm chart requests secrets. |
+| 0.6 | 30 September 2026 | Added section 8.5.1 on connecting ESO to Passwordstate through the ESO webhook provider, and narrowed Q16. |
 
 ## 2. Background and research
 
@@ -529,6 +530,85 @@ The product needs the following secrets:
 - Internal mail relay credentials for the worker service, if the relay needs
   them.
 
+#### 8.5.1 Connection from ESO to Passwordstate
+
+ESO has no built-in Passwordstate provider. The recommended connection uses
+the ESO webhook provider, which calls any HTTP API that returns JSON. The
+platform team owns the store. This section describes the pattern that the
+chart expects, so the team can confirm that their store matches it.
+
+The connection works as follows:
+
+1. A `ClusterSecretStore` uses the webhook provider to call the Passwordstate
+   REST API over HTTPS, with the organisation's certificate authority.
+2. The store sends the Passwordstate API key in the `APIKey` request header.
+   The key comes from a Kubernetes Secret in the ESO namespace, not from the
+   product's namespace.
+3. Each `ExternalSecret` in the product's chart gives a Passwordstate
+   password ID as its remote key. The store puts the ID in the request URL.
+4. The store reads the `Password` field from the JSON response and returns
+   it to ESO.
+
+The following example shows the shape of the store. Field names come from
+the ESO webhook provider and the Passwordstate API. Check them against the
+ESO and Passwordstate versions that the platform team runs.
+
+```yaml
+apiVersion: external-secrets.io/v1
+kind: ClusterSecretStore
+metadata:
+  name: passwordstate
+spec:
+  provider:
+    webhook:
+      url: "https://passwordstate.example.internal/api/passwords/{{ .remoteRef.key }}"
+      method: GET
+      headers:
+        APIKey: "{{ .auth.apikey }}"
+      result:
+        jsonPath: "$[0].Password"
+      secrets:
+        - name: auth
+          secretRef:
+            name: passwordstate-api-key
+            namespace: external-secrets
+      caProvider:
+        type: ConfigMap
+        name: internal-ca
+        namespace: external-secrets
+        key: ca.crt
+```
+
+The chart then requests a secret like this:
+
+```yaml
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: api-service
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: passwordstate
+  target:
+    name: api-service-secrets
+  data:
+    - secretKey: ENTRA_CLIENT_SECRET
+      remoteRef:
+        key: "1234"
+```
+
+This pattern has the following consequences:
+
+- Each request returns one value. A secret with several fields, such as a
+  user name and a password, needs one `data` entry for each field, and a
+  store that can read other fields, such as `UserName`.
+- A store that looks up entries by title instead of ID needs a different URL
+  and JSON path, such as a search on the product's password list.
+- The API key's scope sets what the store can read. Use a key for the
+  product's password list only, not a system-wide key.
+
 ### 8.6 Observability
 
 The services meet the following observability requirements:
@@ -645,10 +725,13 @@ The following questions need answers before or during R0:
 - **Q14**: Which supported S3-compatible store does the product use? The
   owner chooses one before general availability. If it's MinIO, it must be a
   supported, patched edition.
-- **Q16**: What is the name and kind of the ESO store that connects to
-  Passwordstate, and how does an `ExternalSecret` identify a Passwordstate
-  entry? ESO has no built-in Passwordstate provider, so the store probably
-  uses the webhook provider, which sets the key format.
+- **Q16**: Does the platform team's ESO store match the pattern in
+  section 8.5.1? Specifically, confirm the following:
+  - The store's name and kind.
+  - Whether `ExternalSecret` resources identify entries by password ID or by
+    title.
+  - Which fields the store can return, such as `Password` and `UserName`.
+  - Whether the store's API key covers one password list or several.
 
 ## 13. References
 
@@ -664,7 +747,9 @@ The research for this document used the following sources:
 - [RKE2 documentation](https://docs.rke2.io/)
 - [MinIO CE in 2026: retired upstream, source-only, and what to use](https://www.glukhov.org/data-infrastructure/object-storage/minio-dead/)
 - [MinIO users complain after admin UI removed from Community Edition](https://blocksandfiles.com/2025/06/19/minio-removes-management-features-from-basic-community-edition-object-storage-code/)
-- [External Secrets Operator](https://github.com/external-secrets/external-secrets)
+- [External Secrets Operator](https://external-secrets.io/latest/)
+- [External Secrets Operator: Webhook provider](https://external-secrets.io/latest/provider/webhook/)
+- [Using External Secrets Operator with HTTP endpoints: a complete guide](https://zerotohero.dev/inbox/eso-webhook-provider/)
 - [Miro REST API](https://developers.miro.com/docs/rest-api-reference-guide)
 - [Information Security Manual (ISM)](https://www.cyber.gov.au/resources-business-and-government/essential-cyber-security/ism)
 - [Protective Security Policy Framework (PSPF)](https://www.protectivesecurity.gov.au/)
