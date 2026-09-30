@@ -48,6 +48,23 @@ describe("exportSvg", () => {
   });
 });
 
+describe("image export", () => {
+  const img = () => {
+    const b = new Board(new Y.Doc());
+    b.add({ type: "image", objectKey: "file-1", mimeType: "image/png", x: 0, y: 0, width: 50, height: 40 });
+    return b.list();
+  };
+  it("embeds the image bytes when given, and shows a placeholder otherwise", () => {
+    expect(exportSvg(img(), { classification: "OFFICIAL", images: { "file-1": "data:image/png;base64,AAAA" } })).toContain('<image href="data:image/png;base64,AAAA"');
+    expect(exportSvg(img(), { classification: "OFFICIAL" })).not.toContain("<image");
+  });
+  it("embeds only image data URIs", () => {
+    for (const bad of ["https://evil.test/x.png", 'data:text/html;base64,AAAA', 'data:image/png;base64,AA" onload="x']) {
+      expect(exportSvg(img(), { classification: "OFFICIAL", images: { "file-1": bad } })).not.toContain("<image");
+    }
+  });
+});
+
 describe("text export", () => {
   const text = (extra: Record<string, unknown>) => {
     const b = new Board(new Y.Doc());

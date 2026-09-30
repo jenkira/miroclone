@@ -6,6 +6,7 @@ export type AuditAction =
   | "classification_change"
   | "export"
   | "import"
+  | "upload"
   | "delete";
 
 export interface AuditEvent {

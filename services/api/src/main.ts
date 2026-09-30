@@ -2,6 +2,8 @@ import pg from "pg";
 import { migrate } from "@miroclone/server-core";
 import { buildApp } from "./app.js";
 import { GraphClient } from "./graph.js";
+import { S3ObjectStore } from "./objectstore.js";
+import { ClamdScanner } from "./scanner.js";
 import { EntraOidcClient } from "./oidc.js";
 import { Redis } from "ioredis";
 import { defaultSessionPolicy, parseKey, RedisSessionStore, SessionManager } from "@miroclone/server-core";
@@ -38,6 +40,18 @@ const app = buildApp({
   oidc,
   db,
   graph: new GraphClient(fetch, process.env.GRAPH_BASE_URL),
+  // File uploads need both. Without them the API refuses uploads, so nothing reaches users unscanned.
+  store: process.env.S3_BUCKET
+    ? new S3ObjectStore({
+        endpoint: process.env.S3_ENDPOINT,
+        region: process.env.S3_REGION ?? "us-east-1",
+        bucket: process.env.S3_BUCKET,
+        forcePathStyle: process.env.S3_FORCE_PATH_STYLE !== "0",
+        accessKeyId: required("S3_ACCESS_KEY_ID"),
+        secretAccessKey: required("S3_SECRET_ACCESS_KEY"),
+      })
+    : undefined,
+  scanner: process.env.CLAMD_HOST ? new ClamdScanner(process.env.CLAMD_HOST, Number(process.env.CLAMD_PORT ?? 3310)) : undefined,
   tokenKey: parseKey(required("SESSION_ENCRYPTION_KEY")),
   sessions: new SessionManager(new RedisSessionStore(redis, defaultSessionPolicy.maxLifetimeSeconds)),
   secureCookies: process.env.INSECURE_COOKIES !== "1",

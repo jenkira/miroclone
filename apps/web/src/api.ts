@@ -26,6 +26,16 @@ export const api = {
   members: (id: string) => call<Member[]>("GET", `/api/boards/${id}/members`),
   share: (id: string, p: Person, role: string) => call<unknown>("PUT", `/api/boards/${id}/members`, { type: p.type, principalId: p.id, role, name: p.name }),
   unshare: (id: string, m: { type: string; id: string }) => call<unknown>("DELETE", `/api/boards/${id}/members/${m.type}/${encodeURIComponent(m.id)}`),
+  uploadFile: async (boardId: string, file: Blob) => {
+    const res = await fetch(`/api/boards/${boardId}/files`, { method: "POST", credentials: "same-origin", headers: { "content-type": file.type || "application/octet-stream" }, body: file });
+    if (!res.ok) throw Object.assign(new Error(`${res.status}`), { status: res.status });
+    return res.json() as Promise<{ id: string; mimeType: string }>;
+  },
+  fetchFile: async (boardId: string, fileId: string) => {
+    const res = await fetch(`/api/boards/${boardId}/files/${fileId}`, { credentials: "same-origin" });
+    if (!res.ok) throw Object.assign(new Error(`${res.status}`), { status: res.status });
+    return res.blob();
+  },
   recordExport: (id: string, format: string, scope = "board") => call<unknown>("POST", `/api/boards/${id}/exports`, { format, scope }),
   importBoard: (file: string, classification?: string) => call<{ id: string }>("POST", "/api/boards/import", { file, classification }),
   logout: () => call<unknown>("POST", "/auth/logout"),

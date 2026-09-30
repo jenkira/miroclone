@@ -8,6 +8,7 @@ import { Canvas, colourFor, type CanvasApi } from "./Canvas.js";
 import { FormatBar } from "./FormatBar.js";
 import { ExportMenu } from "./ExportMenu.js";
 import { cacheBoard, clearOfflineCache } from "./offline.js";
+import { ACCEPTED, MAX_BYTES, sizeFor, uploadMessage, useBoardImages } from "./images.js";
 import { ShareDialog } from "./ShareDialog.js";
 import { Toolbar } from "./Toolbar.js";
 import type { Tool } from "./tools.js";
@@ -22,8 +23,11 @@ export function BoardView({ id, me }: { id: string; me: Me }) {
   const apiRef = useRef<CanvasApi | null>(null);
   const [selected, setSelected] = useState<string[]>([]);
   const [sharing, setSharing] = useState(false);
+  const [notice, setNotice] = useState("");
+  const fileInput = useRef<HTMLInputElement>(null);
   const [people, setPeople] = useState<{ id: number; name: string; colour: string }[]>([]);
 
+  useEffect(() => { useBoardImages(id); return () => useBoardImages(undefined); }, [id]);
   useEffect(() => { api.board(id).then(setMeta).catch(() => setError("You can't open this board.")); }, [id]);
 
   const session = useMemo(() => {
@@ -57,6 +61,25 @@ export function BoardView({ id, me }: { id: string; me: Me }) {
   if (!meta) return <p>Loading board…</p>;
   const readOnly = meta.role === "viewer" || meta.role === "commenter";
 
+  /** Uploads images and places each on the board, one after another so they don't overlap. */
+  const addImages = async (files: File[], at: { x: number; y: number }) => {
+    setNotice("");
+    let offset = 0;
+    for (const f of files) {
+      if (!ACCEPTED.includes(f.type)) { setNotice(uploadMessage(415)); continue; }
+      if (f.size > MAX_BYTES) { setNotice(uploadMessage(413)); continue; }
+      try {
+        const { id: fileId, mimeType } = await api.uploadFile(id, f);
+        const size = await sizeFor(f);
+        const obj = session.board.add({ type: "image", objectKey: fileId, mimeType, x: at.x - size.width / 2 + offset, y: at.y - size.height / 2 + offset, ...size } as never);
+        apiRef.current?.select([obj.id]);
+        offset += 24;
+      } catch (e) {
+        setNotice(uploadMessage((e as { status?: number }).status));
+      }
+    }
+  };
+
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100vh", fontFamily: "system-ui" }}>
       <Banner classification={meta.classification} />
@@ -65,9 +88,14 @@ export function BoardView({ id, me }: { id: string; me: Me }) {
         <strong>{meta.title}</strong>
         <span aria-live="polite">{status === "connected" ? "Saved automatically" : status === "connecting" ? "Connecting…" : "Offline. Changes merge when you reconnect."}</span>
         {readOnly && <span>View only</span>}
+        {!readOnly && <>
+          <button onClick={() => fileInput.current?.click()}>Add image</button>
+          <input ref={fileInput} type="file" accept={ACCEPTED.join(",")} multiple hidden aria-label="Choose images"
+            onChange={(e) => { const c = apiRef.current; void addImages([...(e.target.files ?? [])], c ? c.viewCentre() : { x: 0, y: 0 }); e.target.value = ""; }} />
+        </>}
         {meta.role === "owner" && <button onClick={() => setSharing(true)}>Share</button>}
         <ExportMenu board={session.board} title={meta.title} classification={meta.classification} selection={() => apiRef.current?.selection() ?? []}
-          authorise={(format, scope) => api.recordExport(id, format, scope) as Promise<void>} />
+          authorise={(format, scope) => api.recordExport(id, format, scope) as Promise<void>} loadImage={(fileId) => api.fetchFile(id, fileId)} />
         <span style={{ marginLeft: "auto", display: "flex", gap: 4 }} aria-label="People on this board">
           {people.map((p) => (
             <button key={p.id} title={p.id === session.doc.clientID ? "You" : `Go to ${p.name}`} disabled={p.id === session.doc.clientID}
@@ -78,9 +106,10 @@ export function BoardView({ id, me }: { id: string; me: Me }) {
           ))}
         </span>
       </header>
+      {notice && <p role="alert" style={{ margin: 0, padding: "2px 8px", background: "#fff3e0" }}>{notice}</p>}
       <Toolbar tool={tool} onChange={setTool} disabled={readOnly} />
       <FormatBar board={session.board} selection={selected} readOnly={readOnly} api={apiRef} />
-      <Canvas apiRef={apiRef} onSelect={setSelected} board={session.board} tool={tool} readOnly={readOnly} awareness={session.provider.awareness ?? undefined} onToolDone={() => setTool("select")} />
+      <Canvas apiRef={apiRef} onSelect={setSelected} onFiles={addImages} board={session.board} tool={tool} readOnly={readOnly} awareness={session.provider.awareness ?? undefined} onToolDone={() => setTool("select")} />
       <Banner classification={meta.classification} />
       {sharing && <ShareDialog boardId={id} onClose={() => setSharing(false)} />}
     </div>

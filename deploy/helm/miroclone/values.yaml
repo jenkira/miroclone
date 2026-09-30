@@ -39,6 +39,27 @@ postgres:
 redis:
   host: ""
 
+# Object storage for uploaded files: any S3-compatible store, through the standard S3 API (PRD section 8.1).
+# Leave bucket empty to turn uploads off. Then the API refuses them.
+s3:
+  endpoint: ""
+  region: us-east-1
+  bucket: ""
+  # Most on-premises stores need path-style addressing.
+  forcePathStyle: true
+
+# The on-premises ClamAV service that scans every upload before anyone can download it.
+# Uploads are refused when it's missing or down.
+clamd:
+  host: ""
+  port: 3310
+
+# A ConfigMap that holds the organisation's certificate authority, for the object store and the egress proxy.
+# The API trusts it in addition to the system roots.
+tls:
+  caConfigMap: ""
+  caKey: ca.crt
+
 ingress:
   enabled: true
   className: nginx
@@ -73,6 +94,9 @@ externalSecrets:
     POSTGRES_USER: ""
     POSTGRES_PASSWORD: ""
     REDIS_PASSWORD: ""
+    # Add these two when s3.bucket is set:
+    # S3_ACCESS_KEY_ID: ""
+    # S3_SECRET_ACCESS_KEY: ""
   collab:
     POSTGRES_USER: ""
     POSTGRES_PASSWORD: ""
@@ -87,3 +111,7 @@ networkPolicy:
   # Raw "to" entries for NetworkPolicy egress rules.
   postgresTo: []
   redisTo: []
+  # Where the API reaches the object store and ClamAV. Both apply to the API only.
+  s3To: []
+  s3Port: 443
+  clamdTo: []

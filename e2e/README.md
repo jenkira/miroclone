@@ -37,3 +37,17 @@ The script `canvas.mjs` needs only the web dev server. It opens the local board 
 resize, rotate, rotated hit testing, undo, sticky auto-size, text formatting, link safety, and
 zoom to fit. Run `pnpm --filter @miroclone/web exec vite --port 5199 --host 127.0.0.1`, then run
 `node e2e/canvas.mjs`.
+
+## Image test
+
+The script `images.mjs` needs the full-stack setup, with the API started against the fake S3 store and
+the fake ClamAV from `services/api/dev/fake-storage.ts` (`pnpm --filter @miroclone/api storage`). Start
+the API with `S3_ENDPOINT=http://127.0.0.1:9100`, `S3_BUCKET=boards`, `S3_FORCE_PATH_STYLE=1`,
+`S3_ACCESS_KEY_ID=dev`, `S3_SECRET_ACCESS_KEY=dev`, `CLAMD_HOST=127.0.0.1`, and `CLAMD_PORT=3311`.
+The last step stops the fake store and scanner, so restart them before you run it again.
+
+## Offline test
+
+The script `offline.mjs` needs the full-stack setup. It stops and restarts the collaboration service,
+so set `COLLAB_PID_FILE` to a file that holds the process ID of the running service, and `COLLAB_DIR`
+to `services/collab`.

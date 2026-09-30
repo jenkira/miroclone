@@ -109,7 +109,7 @@ await wait(300);
 const log = readFileSync(process.env.API_LOG ?? "api.log", "utf8").split("\n").filter((l) => l.includes('"type":"audit"')).map((l) => JSON.parse(l));
 check("audit log has sign-in, board create, share, and export events", ["sign_in", "board_create", "share_change", "export"].every((a) => log.some((e) => e.action === a)), [...new Set(log.map((e) => e.action))].join(","));
 check("audit log records the refused sign-ins", [...new Set(log.filter((e) => e.action === "sign_in" && e.detail?.allowed === false).map((e) => e.detail.reason))].sort().join() === "mfa,role");
-const pc = log.find((e) => e.action === "export");
+const pc = log.filter((e) => e.action === "export").at(-1);
 check("export audit event carries the classification", pc?.detail?.classification === "PROTECTED" && pc?.detail?.format === "png");
 
 // 10. Sign out ends the session

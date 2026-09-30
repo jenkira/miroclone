@@ -1,7 +1,8 @@
-import { CanvasTextMetrics, Container, Graphics, Text, TextStyle } from "pixi.js";
+import { CanvasTextMetrics, Container, Graphics, Sprite, Text, TextStyle } from "pixi.js";
 import type * as Y from "yjs";
 import { boardObjectSchema, isSafeLink, listLines, type Board, type BoardObject } from "@miroclone/shared";
 import { handlePositions } from "./geometry.js";
+import { imageLoader } from "./images.js";
 
 const hex = (c: string) => Number.parseInt(c.replace("#", ""), 16);
 
@@ -107,8 +108,16 @@ export function drawObject(o: BoardObject, board: Board): Drawn {
       break;
     }
     case "image":
-      // Image loading arrives with the upload pipeline. A placeholder keeps layout correct.
+      // A placeholder holds the space until the image arrives, and stays if it can't load.
       g.rect(0, 0, o.width, o.height).fill(0xeeeeee).stroke({ width: 1, color: 0x9e9e9e });
+      imageLoader()?.(o.objectKey).then((tex) => {
+        if (c.destroyed) return;
+        const sprite = new Sprite(tex);
+        sprite.width = o.width;
+        sprite.height = o.height;
+        g.clear();
+        c.addChild(sprite);
+      }).catch(() => { /* The placeholder stays. */ });
       break;
     case "connector": {
       const ends = board.connectorEnds(o.id);

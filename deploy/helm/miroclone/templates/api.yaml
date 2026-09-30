@@ -7,4 +7,17 @@
   (dict "name" "POSTGRES_DB" "value" .Values.postgres.database)
   (dict "name" "POSTGRES_SSL" "value" (ternary "1" "0" .Values.postgres.tls))
   (dict "name" "REDIS_HOST" "value" (required "Set redis.host" .Values.redis.host)) -}}
-{{ include "miroclone.workload" (dict "root" $ "name" "api" "svc" .Values.services.api "env" $env "secret" true "probePath" "/healthz" "readyPath" "/readyz") }}
+{{- if .Values.s3.bucket }}
+{{- $env = append $env (dict "name" "S3_BUCKET" "value" .Values.s3.bucket) }}
+{{- $env = append $env (dict "name" "S3_REGION" "value" .Values.s3.region) }}
+{{- $env = append $env (dict "name" "S3_FORCE_PATH_STYLE" "value" (ternary "1" "0" .Values.s3.forcePathStyle)) }}
+{{- with .Values.s3.endpoint }}{{ $env = append $env (dict "name" "S3_ENDPOINT" "value" .) }}{{ end }}
+{{- end }}
+{{- if .Values.clamd.host }}
+{{- $env = append $env (dict "name" "CLAMD_HOST" "value" .Values.clamd.host) }}
+{{- $env = append $env (dict "name" "CLAMD_PORT" "value" (toString .Values.clamd.port)) }}
+{{- end }}
+{{- if .Values.tls.caConfigMap }}
+{{- $env = append $env (dict "name" "NODE_EXTRA_CA_CERTS" "value" (printf "/etc/miroclone/ca/%s" .Values.tls.caKey)) }}
+{{- end -}}
+{{ include "miroclone.workload" (dict "root" $ "name" "api" "svc" .Values.services.api "env" $env "secret" true "caConfigMap" .Values.tls.caConfigMap "probePath" "/healthz" "readyPath" "/readyz") }}

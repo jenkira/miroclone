@@ -3,6 +3,8 @@ import cookie from "@fastify/cookie";
 import { validateClaims, type EntraClaims } from "@miroclone/shared";
 import { sealTokens } from "@miroclone/server-core";
 import type { GraphClient } from "./graph.js";
+import type { ObjectStore } from "./objectstore.js";
+import type { Scanner } from "./scanner.js";
 import { audit } from "./audit.js";
 import { pkceChallenge, pkceVerifier, type OidcClient } from "./oidc.js";
 import { newId, SESSION_COOKIE, SessionManager } from "@miroclone/server-core";
@@ -20,6 +22,9 @@ export interface AppOptions {
   secureCookies?: boolean;
   exportPolicy?: ExportPolicy;
   graph: GraphClient;
+  /** Object storage and scanner for file uploads. Uploads are refused unless both exist. */
+  store?: ObjectStore;
+  scanner?: Scanner;
   /** Key for encrypting Graph tokens in the session store (32 bytes). */
   tokenKey: Buffer;
   txTtlSeconds?: number;

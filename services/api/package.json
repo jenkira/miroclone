@@ -9,9 +9,11 @@
     "build": "pnpm bundle",
     "start": "node --import tsx src/main.ts",
     "bundle": "esbuild src/main.ts --bundle --platform=node --format=esm --target=node22 --outfile=dist/main.js --banner:js=\"import{createRequire as __cr}from'node:module';const require=__cr(import.meta.url);\" --external:pg-native",
-    "idp": "node --import tsx dev/fake-idp.ts"
+    "idp": "node --import tsx dev/fake-idp.ts",
+    "storage": "node --import tsx dev/fake-storage.ts"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1144.0",
     "@fastify/cookie": "^11.1.2",
     "@miroclone/server-core": "workspace:*",
     "@miroclone/shared": "workspace:*",

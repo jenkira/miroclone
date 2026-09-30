@@ -9,7 +9,7 @@ app.kubernetes.io/part-of: miroclone
 
 {{/*
 One workload: a Deployment and a Service. Parameters: root, name, svc, env (list of name/value maps),
-secret (bool), probePath (empty for a TCP probe), preStop (bool).
+secret (bool), caConfigMap (optional), probePath (empty for a TCP probe), preStop (bool).
 */}}
 {{- define "miroclone.workload" -}}
 {{- $root := .root -}}
@@ -92,9 +92,19 @@ spec:
           volumeMounts:
             - name: tmp
               mountPath: /tmp
+            {{- if .caConfigMap }}
+            - name: ca
+              mountPath: /etc/miroclone/ca
+              readOnly: true
+            {{- end }}
       volumes:
         - name: tmp
           emptyDir: {}
+        {{- if .caConfigMap }}
+        - name: ca
+          configMap:
+            name: {{ .caConfigMap }}
+        {{- end }}
 ---
 apiVersion: v1
 kind: Service

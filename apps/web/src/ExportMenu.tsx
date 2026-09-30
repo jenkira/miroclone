@@ -1,6 +1,15 @@
 import { useState } from "react";
 import { boundsOf, exportJson, exportSvg, type Board } from "@miroclone/shared";
 
+function toDataUri(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result));
+    r.onerror = () => reject(r.error);
+    r.readAsDataURL(blob);
+  });
+}
+
 function download(name: string, blob: Blob) {
   const url = URL.createObjectURL(blob);
   const a = Object.assign(document.createElement("a"), { href: url, download: name });
@@ -31,8 +40,10 @@ export function svgToPng(svg: string, width: number, height: number, scale = 2):
 type Format = "png" | "svg" | "json";
 
 /** Exports the board, or the current selection, in the browser. `authorise` checks policy and records the audit event first. */
-export function ExportMenu({ board, title, classification, selection, authorise }: {
+export function ExportMenu({ board, title, classification, selection, authorise, loadImage }: {
   board: Board; title: string; classification: string; selection: () => string[];
+  /** Returns an image file's bytes, so the export can embed it. */
+  loadImage?: (fileId: string) => Promise<Blob>;
   authorise: (format: Format, scope: string) => Promise<void>;
 }) {
   const [message, setMessage] = useState("");
@@ -46,7 +57,13 @@ export function ExportMenu({ board, title, classification, selection, authorise 
       const objs = ids.length ? all.filter((o) => ids.includes(o.id) || (o.type === "connector" && ids.includes(o.from) && ids.includes(o.to))) : all;
       const base = title.replace(/[^\w.-]+/g, "_") || "board";
       if (format === "json") return download(`${base}.json`, new Blob([exportJson(all, { title, classification })], { type: "application/json" }));
-      const svg = exportSvg(objs, { classification, title });
+      const images: Record<string, string> = {};
+      if (loadImage) {
+        await Promise.all(objs.filter((o) => o.type === "image").map(async (o) => {
+          try { images[(o as { objectKey: string }).objectKey] = await toDataUri(await loadImage((o as { objectKey: string }).objectKey)); } catch { /* A placeholder shows instead. */ }
+        }));
+      }
+      const svg = exportSvg(objs, { classification, title, images });
       if (format === "svg") return download(`${base}.svg`, new Blob([svg], { type: "image/svg+xml" }));
       const b = boundsOf(objs);
       download(`${base}.png`, await svgToPng(svg, b.width, b.height + 56));

@@ -2,7 +2,11 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import * as Y from "yjs";
 import { atLeast, boardRoles, defaultClassifications, importJson, OBJECTS_MAP, type BoardRole } from "@miroclone/shared";
 import { appendUpdate, openTokens, sealTokens } from "@miroclone/server-core";
+import { createHash, randomUUID } from "node:crypto";
 import type { GraphClient } from "./graph.js";
+import { detectImageType, MAX_UPLOAD_BYTES, svgProblem } from "./files.js";
+import type { ObjectStore } from "./objectstore.js";
+import type { Scanner } from "./scanner.js";
 import type { OidcClient } from "./oidc.js";
 import { audit } from "./audit.js";
 import * as boards from "./boards.js";
@@ -17,15 +21,19 @@ function status(err: unknown): number {
   if (err instanceof boards.NotFound) return 404;
   if (err instanceof boards.Forbidden) return 403;
   if (err instanceof boards.Invalid) return 400;
-  return 500;
+  // Fastify's own client errors, such as an oversize body (413) or a bad content type (415).
+  const code = (err as { statusCode?: number }).statusCode;
+  return code && code >= 400 && code < 500 ? code : 500;
 }
 
 /** Who can export boards of a classification (EXP-5). Missing classifications allow everyone who can view. */
 export type ExportPolicy = Record<string, "everyone" | "owners" | "none">;
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export const exportFormats = ["png", "svg", "pdf", "json"] as const;
 
-export function boardRoutes(app: FastifyInstance, opts: { db: Db; sessions: SessionManager; exportPolicy?: ExportPolicy; graph: GraphClient; oidc: OidcClient; tokenKey: Buffer }) {
+export function boardRoutes(app: FastifyInstance, opts: { db: Db; sessions: SessionManager; exportPolicy?: ExportPolicy; graph: GraphClient; oidc: OidcClient; tokenKey: Buffer; store?: ObjectStore; scanner?: Scanner }) {
   const { db } = opts;
   const actorOf = (r: FastifyRequest): boards.Actor => ({ id: r.session!.userId, groups: r.session!.groups });
 
@@ -37,11 +45,76 @@ export function boardRoutes(app: FastifyInstance, opts: { db: Db; sessions: Sess
     api.setErrorHandler((err: Error, req, reply) => {
       const code = status(err);
       if (code === 500) req.log.error({ err });
-      reply.code(code).send({ error: code === 500 ? "internal" : err.message || err.constructor.name });
+      reply.code(code).send({ error: code === 500 ? "internal" : code === 413 ? "file_too_large" : err.message || err.constructor.name });
     });
 
     const isClassification = (k: unknown): k is string =>
       typeof k === "string" && defaultClassifications.some((c) => c.key === k);
+
+    // --- Files (CNV-8) ---
+    // Uploads arrive as raw bytes. Every type is parsed as a buffer, and the route decides what it accepts.
+    api.addContentTypeParser(
+      ["image/png", "image/jpeg", "image/gif", "image/webp", "image/svg+xml", "application/octet-stream"],
+      { parseAs: "buffer", bodyLimit: MAX_UPLOAD_BYTES },
+      (_req, body, done) => done(null, body),
+    );
+
+    api.post<{ Params: { id: string }; Body: Buffer }>("/api/boards/:id/files", { bodyLimit: MAX_UPLOAD_BYTES }, async (req, reply) => {
+      const role = await boards.roleOnBoard(db, actorOf(req), req.params.id);
+      if (!role) throw new boards.NotFound();
+      if (!atLeast(role, "editor")) throw new boards.Forbidden();
+      // Without storage and a scanner, refuse, so nothing reaches users unscanned.
+      if (!opts.store || !opts.scanner) return reply.code(503).send({ error: "uploads_unavailable" });
+      const body = req.body;
+      if (!Buffer.isBuffer(body) || body.length === 0) return reply.code(400).send({ error: "empty_file" });
+
+      const type = detectImageType(body);
+      const declared = (req.headers["content-type"] ?? "").split(";")[0]!.trim();
+      if (!type || (declared !== "application/octet-stream" && declared !== type))
+        return reply.code(415).send({ error: "unsupported_type" });
+      if (type === "image/svg+xml") {
+        const why = svgProblem(body);
+        if (why) return reply.code(422).send({ error: "svg_not_allowed", reason: why });
+      }
+
+      let scan;
+      try { scan = await opts.scanner.scan(body); }
+      catch (err) { req.log.error({ err }, "malware scan failed"); return reply.code(503).send({ error: "scan_unavailable" }); }
+      if (!scan.clean) {
+        audit({ action: "upload", actor: req.session!.userId, boardId: req.params.id, detail: { allowed: false, reason: "malware", signature: scan.signature } });
+        return reply.code(422).send({ error: "malware_found" });
+      }
+
+      const id = randomUUID();
+      const key = `boards/${req.params.id}/${id}`;
+      await opts.store.put(key, body, type);
+      await db.query(
+        "INSERT INTO board_files (id, board_id, object_key, mime_type, size_bytes, sha256, uploaded_by) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+        [id, req.params.id, key, type, body.length, createHash("sha256").update(body).digest("hex"), req.session!.userId]);
+      audit({ action: "upload", actor: req.session!.userId, boardId: req.params.id, detail: { allowed: true, mimeType: type, bytes: body.length } });
+      return reply.code(201).send({ id, mimeType: type });
+    });
+
+    api.get<{ Params: { id: string; fileId: string } }>("/api/boards/:id/files/:fileId", async (req, reply) => {
+      const role = await boards.roleOnBoard(db, actorOf(req), req.params.id);
+      if (!role) throw new boards.NotFound();
+      if (!opts.store) return reply.code(503).send({ error: "uploads_unavailable" });
+      // The file must belong to the board in the URL, so a file ID from another board gives nothing.
+      if (!UUID.test(req.params.fileId)) throw new boards.NotFound();
+      const { rows } = await db.query<{ object_key: string; mime_type: string }>(
+        "SELECT object_key, mime_type FROM board_files WHERE id = $1 AND board_id = $2",
+        [req.params.fileId, req.params.id]);
+      if (!rows[0]) throw new boards.NotFound();
+      const bytes = await opts.store.get(rows[0].object_key);
+      if (!bytes) throw new boards.NotFound();
+      return reply
+        .header("content-type", rows[0].mime_type)
+        .header("x-content-type-options", "nosniff")
+        // Even if a browser opened the file as a page, it couldn't run anything or load anything.
+        .header("content-security-policy", "default-src 'none'; style-src 'unsafe-inline'; sandbox")
+        .header("cache-control", "private, max-age=3600")
+        .send(Buffer.from(bytes));
+    });
 
     api.get<{ Querystring: { filter?: boards.BoardFilter } }>("/api/boards", async (req) =>
       boards.listBoards(db, actorOf(req), req.query.filter));

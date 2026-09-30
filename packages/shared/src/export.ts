@@ -28,7 +28,10 @@ export function boundsOf(objs: readonly BoardObject[], pad = 40): Bounds {
   return { x: x - pad, y: y - pad, width: r - x + pad * 2, height: b - y + pad * 2 };
 }
 
-function shapeMarkup(o: BoardObject, byId: Map<string, BoardObject>): string {
+/** An inline raster or SVG image, as the export embeds it. Anything else isn't embedded. */
+const DATA_IMAGE = /^data:image\/(?:png|jpeg|gif|webp|svg\+xml);base64,[A-Za-z0-9+/=]+$/;
+
+function shapeMarkup(o: BoardObject, byId: Map<string, BoardObject>, images: Record<string, string>): string {
   const t = (text: string) => text
     ? `<text x="${o.x + 8}" y="${o.y + 24}" font-size="16" font-family="sans-serif" fill="#1a1a1a">${esc(text)}</text>` : "";
   switch (o.type) {
@@ -66,9 +69,12 @@ function shapeMarkup(o: BoardObject, byId: Map<string, BoardObject>): string {
       if (!a || !b) return "";
       return `<line x1="${a.x + a.width / 2}" y1="${a.y + a.height / 2}" x2="${b.x + b.width / 2}" y2="${b.y + b.height / 2}" stroke="#1a1a1a" stroke-width="2"/>`;
     }
-    case "image":
-      // Image bytes stay in object storage, so an export shows a labelled placeholder.
+    case "image": {
+      const uri = images[o.objectKey];
+      if (uri && DATA_IMAGE.test(uri)) return `<image href="${uri}" x="${o.x}" y="${o.y}" width="${o.width}" height="${o.height}" preserveAspectRatio="none"/>`;
+      // Without the bytes, an export shows a placeholder.
       return `<rect x="${o.x}" y="${o.y}" width="${o.width}" height="${o.height}" fill="#eee" stroke="#9e9e9e"/>`;
+    }
   }
 }
 
@@ -78,14 +84,14 @@ function shapeMarkup(o: BoardObject, byId: Map<string, BoardObject>): string {
  */
 export function exportSvg(
   objs: readonly BoardObject[],
-  opts: { classification: string; title?: string; bounds?: Bounds; classifications?: readonly Classification[] },
+  opts: { classification: string; title?: string; bounds?: Bounds; classifications?: readonly Classification[]; images?: Record<string, string> },
 ): string {
   const c = findClassification(opts.classification, opts.classifications);
   const bar = 28;
   const b = opts.bounds ?? boundsOf(objs);
   const byId = new Map(objs.map((o) => [o.id, o]));
   const rotated = (o: BoardObject) => {
-    const m = shapeMarkup(o, byId);
+    const m = shapeMarkup(o, byId, opts.images ?? {});
     return o.rotation && o.type !== "connector" ? `<g transform="rotate(${Number(o.rotation)} ${o.x + o.width / 2} ${o.y + o.height / 2})">${m}</g>` : m;
   };
   const body = [...objs].sort((p, q) => (p.index < q.index ? -1 : 1)).map(rotated).join("");

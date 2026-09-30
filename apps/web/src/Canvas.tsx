@@ -19,6 +19,8 @@ export interface CanvasApi {
   fitSelection(): void;
   /** Moves the viewport to a world point, for jumping to another user (COL-3). */
   centreOn(p: Point): void;
+  /** The world point at the middle of the screen. */
+  viewCentre(): Point;
 }
 
 export interface CanvasProps {
@@ -29,6 +31,8 @@ export interface CanvasProps {
   onToolDone?: () => void;
   apiRef?: { current: CanvasApi | null };
   onSelect?: (ids: string[]) => void;
+  /** Called with image files dropped on the canvas or pasted into it, and the world point to place them. */
+  onFiles?: (files: File[], at: Point) => void;
 }
 
 /** Clipboard shared by every board in this tab, so paste works between boards (CNV-11). It clears on reload and sign-out (COL-10). */
@@ -58,11 +62,12 @@ type Gesture =
 
 const resizable = (o: BoardObject) => o.type !== "connector" && o.type !== "stroke";
 
-export function Canvas({ board, tool, readOnly, awareness, onToolDone, apiRef, onSelect }: CanvasProps) {
+export function Canvas({ board, tool, readOnly, awareness, onToolDone, apiRef, onSelect, onFiles }: CanvasProps) {
   const host = useRef<HTMLDivElement>(null);
   const toolRef = useRef(tool);
   const roRef = useRef(readOnly);
   const onSelectRef = useRef(onSelect);
+  const onFilesRef = useRef(onFiles);
   const selection = useRef<string[]>([]);
   const view = useRef<Viewport>({ x: 0, y: 0, zoom: 1 });
   const redrawRef = useRef<() => void>(() => {});
@@ -71,6 +76,7 @@ export function Canvas({ board, tool, readOnly, awareness, onToolDone, apiRef, o
   toolRef.current = tool;
   roRef.current = readOnly;
   onSelectRef.current = onSelect;
+  onFilesRef.current = onFiles;
   editingRef.current = editing;
 
   useEffect(() => {
@@ -124,6 +130,7 @@ export function Canvas({ board, tool, readOnly, awareness, onToolDone, apiRef, o
         select: setSel,
         fit: () => showRect(boundsOf(board.list(), 0)),
         fitSelection: () => { const objs = selection.current.map((id) => board.get(id)).filter(Boolean) as BoardObject[]; if (objs.length) showRect(boundsOf(objs, 0)); },
+        viewCentre: () => screenToWorld(view.current, el.clientWidth / 2, el.clientHeight / 2),
         centreOn: (p) => { view.current = { ...view.current, x: el.clientWidth / 2 - p.x * view.current.zoom, y: el.clientHeight / 2 - p.y * view.current.zoom }; apply(); },
       };
     }
@@ -297,6 +304,23 @@ export function Canvas({ board, tool, readOnly, awareness, onToolDone, apiRef, o
       }
     };
 
+    // Images arrive by drag and drop or paste. Everything is checked again on the server.
+    const imageFiles = (list: FileList | null | undefined) => [...(list ?? [])].filter((f) => f.type.startsWith("image/"));
+    const dragOver = (e: DragEvent) => { if (onFilesRef.current && !roRef.current && e.dataTransfer?.types.includes("Files")) e.preventDefault(); };
+    const drop = (e: DragEvent) => {
+      const files = imageFiles(e.dataTransfer?.files);
+      if (!files.length || !onFilesRef.current || roRef.current) return;
+      e.preventDefault();
+      onFilesRef.current(files, pos(e));
+    };
+    const paste = (e: ClipboardEvent) => {
+      const tag = (e.target as HTMLElement).tagName;
+      if (tag === "TEXTAREA" || tag === "INPUT") return;
+      const files = imageFiles(e.clipboardData?.files);
+      if (!files.length || !onFilesRef.current || roRef.current) return;
+      e.preventDefault();
+      onFilesRef.current(files, screenToWorld(view.current, el.clientWidth / 2, el.clientHeight / 2));
+    };
     const noMenu = (e: Event) => e.preventDefault();
     el.addEventListener("pointerdown", down);
     el.addEventListener("pointermove", move);
@@ -304,6 +328,9 @@ export function Canvas({ board, tool, readOnly, awareness, onToolDone, apiRef, o
     el.addEventListener("dblclick", dbl);
     el.addEventListener("wheel", wheel, { passive: false });
     el.addEventListener("contextmenu", noMenu);
+    el.addEventListener("dragover", dragOver);
+    el.addEventListener("drop", drop);
+    window.addEventListener("paste", paste);
     window.addEventListener("keydown", key);
 
     return () => {
@@ -317,6 +344,9 @@ export function Canvas({ board, tool, readOnly, awareness, onToolDone, apiRef, o
       el.removeEventListener("dblclick", dbl);
       el.removeEventListener("wheel", wheel);
       el.removeEventListener("contextmenu", noMenu);
+      el.removeEventListener("dragover", dragOver);
+      el.removeEventListener("drop", drop);
+      window.removeEventListener("paste", paste);
       window.removeEventListener("keydown", key);
       try { app.destroy(true, { children: true }); } catch { /* not initialised */ }
     };
