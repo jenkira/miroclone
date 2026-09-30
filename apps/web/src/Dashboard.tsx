@@ -27,6 +27,16 @@ export function Dashboard({ me }: { me: Me }) {
         </label>{" "}
         <button type="submit">Create board</button>
       </form>
+      <p>
+        <label>Import a board file{" "}
+          <input type="file" accept="application/json,.json" onChange={async (e) => {
+            const f = e.target.files?.[0];
+            if (!f) return;
+            try { const { id } = await api.importBoard(await f.text()); location.hash = `#/board/${id}`; }
+            catch { alert("The file couldn't be imported. Check that it's a Miroclone board file."); }
+          }} />
+        </label>
+      </p>
       <nav aria-label="Board filters">{filters.map(([k, l]) => <button key={k} aria-pressed={filter === k} onClick={() => setFilter(k)}>{l}</button>)}</nav>
       <ul>
         {boards.map((b) => (

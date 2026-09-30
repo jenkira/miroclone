@@ -9,7 +9,7 @@ async function call<T>(method: string, url: string, body?: unknown): Promise<T> 
     body: body ? JSON.stringify(body) : undefined,
   });
   if (!res.ok) throw Object.assign(new Error(`${res.status}`), { status: res.status });
-  return res.json() as Promise<T>;
+  return (res.status === 204 ? undefined : await res.json()) as T;
 }
 
 export const api = {
@@ -20,5 +20,7 @@ export const api = {
   deleteBoard: (id: string) => call<unknown>("DELETE", `/api/boards/${id}`),
   restoreBoard: (id: string) => call<unknown>("POST", `/api/boards/${id}/restore`),
   star: (id: string, starred: boolean) => call<unknown>("PUT", `/api/boards/${id}/star`, { starred }),
+  recordExport: (id: string, format: string, scope = "board") => call<unknown>("POST", `/api/boards/${id}/exports`, { format, scope }),
+  importBoard: (file: string, classification?: string) => call<{ id: string }>("POST", "/api/boards/import", { file, classification }),
   logout: () => call<unknown>("POST", "/auth/logout"),
 };

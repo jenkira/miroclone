@@ -1,5 +1,7 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
-import { boardRoles, defaultClassifications, type BoardRole } from "@miroclone/shared";
+import * as Y from "yjs";
+import { atLeast, boardRoles, defaultClassifications, importJson, OBJECTS_MAP, type BoardRole } from "@miroclone/shared";
+import { appendUpdate } from "@miroclone/server-core";
 import { audit } from "./audit.js";
 import * as boards from "./boards.js";
 import type { Db } from "@miroclone/server-core";
@@ -16,7 +18,12 @@ function status(err: unknown): number {
   return 500;
 }
 
-export function boardRoutes(app: FastifyInstance, opts: { db: Db; sessions: SessionManager }) {
+/** Who can export boards of a classification (EXP-5). Missing classifications allow everyone who can view. */
+export type ExportPolicy = Record<string, "everyone" | "owners" | "none">;
+
+export const exportFormats = ["png", "svg", "pdf", "json"] as const;
+
+export function boardRoutes(app: FastifyInstance, opts: { db: Db; sessions: SessionManager; exportPolicy?: ExportPolicy }) {
   const { db } = opts;
   const actorOf = (r: FastifyRequest): boards.Actor => ({ id: r.session!.userId, groups: r.session!.groups });
 
@@ -92,6 +99,37 @@ export function boardRoutes(app: FastifyInstance, opts: { db: Db; sessions: Sess
         audit({ action: "classification_change", actor: req.session!.userId, boardId: req.params.id, detail: { ...change, reason: req.body.reason } });
         return change;
       });
+
+    // Files are built in the browser, so board content never passes through this endpoint.
+    // The call checks the export policy and writes the audit event (ADM-1, EXP-5).
+    api.post<{ Params: { id: string }; Body: { format: string; scope?: string } }>("/api/boards/:id/exports", async (req, reply) => {
+      const role = await boards.roleOnBoard(db, actorOf(req), req.params.id);
+      if (!role) throw new boards.NotFound();
+      if (!(exportFormats as readonly string[]).includes(req.body.format)) throw new boards.Invalid("unknown format");
+      const { rows } = await db.query<{ classification: string }>("SELECT classification FROM boards WHERE id = $1", [req.params.id]);
+      const classification = rows[0]!.classification;
+      const rule = opts.exportPolicy?.[classification] ?? "everyone";
+      if (rule === "none" || (rule === "owners" && !atLeast(role, "owner"))) {
+        audit({ action: "export", actor: req.session!.userId, boardId: req.params.id, detail: { allowed: false, format: req.body.format } });
+        throw new boards.Forbidden("Export isn't allowed for this classification.");
+      }
+      audit({ action: "export", actor: req.session!.userId, boardId: req.params.id, detail: { allowed: true, format: req.body.format, scope: req.body.scope ?? "board", classification } });
+      return reply.code(204).send();
+    });
+
+    // Creates a new board from a board file (EXP-3). The importer becomes the owner.
+    api.post<{ Body: { file: string; classification?: string } }>("/api/boards/import", { bodyLimit: 64 * 1024 * 1024 }, async (req, reply) => {
+      let file;
+      try { file = importJson(req.body.file); } catch (e) { throw new boards.Invalid((e as Error).message); }
+      const classification = req.body.classification ?? file.classification;
+      if (!isClassification(classification)) throw new boards.Invalid("unknown classification");
+      const id = await boards.createBoard(db, actorOf(req), file.title, classification);
+      const doc = new Y.Doc();
+      doc.transact(() => { for (const o of file.objects) doc.getMap(OBJECTS_MAP).set(o.id, o); });
+      await appendUpdate(db, id, Y.encodeStateAsUpdate(doc));
+      audit({ action: "import", actor: req.session!.userId, boardId: id, detail: { objects: file.objects.length, classification } });
+      return reply.code(201).send({ id });
+    });
 
     api.put<{ Params: { id: string }; Body: { starred: boolean } }>("/api/boards/:id/star", async (req) => {
       await boards.setStar(db, actorOf(req), req.params.id, !!req.body.starred);

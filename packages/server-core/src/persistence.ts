@@ -1,5 +1,5 @@
 import * as Y from "yjs";
-import type { Db } from "@miroclone/server-core";
+import type { Db } from "./db.js";
 
 /** Rebuilds a board's Yjs document from its stored updates (section 8.2). */
 export async function loadDoc(db: Db, boardId: string): Promise<Y.Doc> {

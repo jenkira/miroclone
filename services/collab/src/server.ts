@@ -1,7 +1,6 @@
 import { Server } from "@hocuspocus/server";
-import type { Db } from "@miroclone/server-core";
+import { appendUpdate, compact, loadDoc, type Db } from "@miroclone/server-core";
 import { authenticate, type AccessResolver } from "./auth.js";
-import { appendUpdate, compact, loadDoc } from "./persistence.js";
 
 export function createCollabServer(opts: { port: number; resolver: AccessResolver; db: Db }) {
   return Server.configure({

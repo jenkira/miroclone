@@ -14,6 +14,8 @@ export interface CanvasProps {
   readOnly: boolean;
   awareness?: Awareness;
   onToolDone?: () => void;
+  /** Receives a function that returns the selected object ids. */
+  selectionRef?: { current: () => string[] };
 }
 
 /** Clipboard shared by every board in this tab, so paste works between boards (CNV-11). It clears on reload and sign-out (COL-10). */
@@ -23,7 +25,7 @@ export const clearClipboard = () => { clipboard = []; };
 const CURSOR_COLOURS = ["#e53935", "#8e24aa", "#3949ab", "#00897b", "#f4511e", "#6d4c41"];
 export const colourFor = (id: number) => CURSOR_COLOURS[id % CURSOR_COLOURS.length]!;
 
-export function Canvas({ board, tool, readOnly, awareness, onToolDone }: CanvasProps) {
+export function Canvas({ board, tool, readOnly, awareness, onToolDone, selectionRef }: CanvasProps) {
   const host = useRef<HTMLDivElement>(null);
   const toolRef = useRef(tool);
   const roRef = useRef(readOnly);
@@ -31,6 +33,7 @@ export function Canvas({ board, tool, readOnly, awareness, onToolDone }: CanvasP
   const view = useRef<Viewport>({ x: 0, y: 0, zoom: 1 });
   const redrawRef = useRef<() => void>(() => {});
   const [editing, setEditing] = useState<{ id: string; left: number; top: number; width: number; height: number; text: string } | null>(null);
+  if (selectionRef) selectionRef.current = () => selection.current;
   toolRef.current = tool;
   roRef.current = readOnly;
 

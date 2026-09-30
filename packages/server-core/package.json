@@ -4,6 +4,16 @@
   "private": true,
   "type": "module",
   "main": "src/index.ts",
-  "scripts": { "typecheck": "tsc -p .", "test": "vitest run" },
-  "dependencies": { "@miroclone/shared": "workspace:*", "ioredis": "^5.4.0" }
+  "scripts": {
+    "typecheck": "tsc -p .",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@miroclone/shared": "workspace:*",
+    "ioredis": "^5.4.0",
+    "yjs": "^13.6.33"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.5.8"
+  }
 }

@@ -1,4 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { exportJson, importJson } from "@miroclone/shared";
+import { loadDoc } from "@miroclone/server-core";
+import { db } from "./testutil.js";
 import type { EntraClaims } from "@miroclone/shared";
 import { SESSION_COOKIE } from "./app.js";
 import { setup, signIn } from "./testutil.js";
@@ -6,8 +9,8 @@ import { setup, signIn } from "./testutil.js";
 const claims = (oid: string, groups: string[] = []): EntraClaims =>
   ({ oid, tid: "t1", name: oid, roles: ["Whiteboard.User"], amr: ["mfa"], groups });
 
-async function login(oid: string, groups?: string[]) {
-  const s = setup(claims(oid, groups));
+async function login(oid: string, groups?: string[], extra = {}) {
+  const s = setup(claims(oid, groups), { t: 1000 }, extra);
   const c = (await signIn(s.app)).cookies[0]!.value;
   return { ...s, cookies: { [SESSION_COOKIE]: c } };
 }
@@ -48,5 +51,62 @@ describe("board routes", () => {
     expect(denied.statusCode).toBe(403);
     const noReason = await a.app.inject({ method: "PUT", url: `/api/boards/${id}/classification`, cookies: a.cookies, payload: { classification: "OFFICIAL", confirmed: true } });
     expect(noReason.statusCode).toBe(400);
+  });
+});
+
+describe("export and import", () => {
+  const exp = (a: Awaited<ReturnType<typeof login>>, id: string, format = "svg") =>
+    a.app.inject({ method: "POST", url: `/api/boards/${id}/exports`, cookies: a.cookies, payload: { format } });
+  const make = async (a: Awaited<ReturnType<typeof login>>, classification = "OFFICIAL") =>
+    (await a.app.inject({ method: "POST", url: "/api/boards", cookies: a.cookies, payload: { title: "B", classification } })).json().id as string;
+
+  it("records an audit event for each export", async () => {
+    const a = await login("ex-ann");
+    const id = await make(a);
+    const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const res = await exp(a, id, "png");
+    const lines = write.mock.calls.map((c) => String(c[0])).filter((l) => l.includes('"type":"audit"'));
+    write.mockRestore();
+    expect(res.statusCode).toBe(204);
+    expect(lines.some((l) => l.includes('"action":"export"') && l.includes('"format":"png"'))).toBe(true);
+  });
+
+  it("applies the per-classification export policy", async () => {
+    const policy = { exportPolicy: { PROTECTED: "owners" as const, SENSITIVE: "none" as const } };
+    const owner = await login("ex-own", [], policy);
+    const viewer = await login("ex-view", [], policy);
+    const id = await make(owner, "PROTECTED");
+    await owner.app.inject({ method: "PUT", url: `/api/boards/${id}/members`, cookies: owner.cookies, payload: { type: "user", principalId: "ex-view", role: "viewer" } });
+    expect((await exp(owner, id)).statusCode).toBe(204);
+    expect((await exp(viewer, id)).statusCode).toBe(403);
+    const closed = await make(owner, "SENSITIVE");
+    expect((await exp(owner, closed)).statusCode).toBe(403);
+  });
+
+  it("hides export for boards the user can't open, and rejects unknown formats", async () => {
+    const a = await login("ex-a2"), b = await login("ex-b2");
+    const id = await make(a);
+    expect((await exp(b, id)).statusCode).toBe(404);
+    expect((await exp(a, id, "exe")).statusCode).toBe(400);
+  });
+
+  it("imports a board file as a new board owned by the importer", async () => {
+    const a = await login("im-ann");
+    const file = exportJson(
+      [{ id: "s1", type: "sticky", x: 1, y: 2, width: 100, height: 100, rotation: 0, index: "a0", locked: false, text: "Hi", color: "#fff475" }],
+      { title: "Imported", classification: "PROTECTED" });
+    expect(importJson(file).objects).toHaveLength(1);
+    const res = await a.app.inject({ method: "POST", url: "/api/boards/import", cookies: a.cookies, payload: { file } });
+    expect(res.statusCode).toBe(201);
+    const id = res.json().id;
+    const board = (await a.app.inject({ url: `/api/boards/${id}`, cookies: a.cookies })).json();
+    expect(board).toMatchObject({ title: "Imported", classification: "PROTECTED", role: "owner" });
+    expect((await loadDoc(db, id)).getMap("objects").get("s1")).toMatchObject({ text: "Hi" });
+  });
+
+  it("rejects a malformed import", async () => {
+    const a = await login("im-bad");
+    const res = await a.app.inject({ method: "POST", url: "/api/boards/import", cookies: a.cookies, payload: { file: "{}" } });
+    expect(res.statusCode).toBe(400);
   });
 });

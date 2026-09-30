@@ -7,7 +7,7 @@ import { newId, SESSION_COOKIE, SessionManager } from "@miroclone/server-core";
 export { SESSION_COOKIE };
 import { upsertUser } from "./boards.js";
 import type { Db } from "@miroclone/server-core";
-import { boardRoutes } from "./routes.js";
+import { boardRoutes, type ExportPolicy } from "./routes.js";
 
 export interface AppOptions {
   tenantId: string;
@@ -16,6 +16,7 @@ export interface AppOptions {
   db: Db;
   /** Set false only for local development over HTTP. */
   secureCookies?: boolean;
+  exportPolicy?: ExportPolicy;
   txTtlSeconds?: number;
 }
 

@@ -1,5 +1,5 @@
 import { PGlite } from "@electric-sql/pglite";
-import { migrate, type Db } from "@miroclone/server-core";
+import { migrate, type Db } from "./db.js";
 import { beforeAll, describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import { appendUpdate, compact, loadDoc } from "./persistence.js";
