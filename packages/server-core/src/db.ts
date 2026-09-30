@@ -9,7 +9,8 @@ export interface Db {
   exec?(sql: string): Promise<unknown>;
 }
 
-const migrationsDir = join(fileURLToPath(new URL(".", import.meta.url)), "..", "migrations");
+/** Set MIGRATIONS_DIR in container images, where the bundle has no source tree around it. */
+const migrationsDir = process.env.MIGRATIONS_DIR ?? join(fileURLToPath(new URL(".", import.meta.url)), "..", "migrations");
 
 /** Applies each `NNN_name.sql` file once, in order. */
 export async function migrate(db: Db, dir = migrationsDir): Promise<string[]> {

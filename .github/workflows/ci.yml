@@ -15,3 +15,31 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm --filter @miroclone/web build
+      - run: pnpm --filter @miroclone/api bundle
+      - run: pnpm --filter @miroclone/collab bundle
+  chart:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - run: helm lint deploy/helm/miroclone -f deploy/helm/miroclone/ci-values.yaml
+      - run: helm template miroclone deploy/helm/miroclone -f deploy/helm/miroclone/ci-values.yaml > /tmp/rendered.yaml
+      - name: Check that the rendered chart names no secret values
+        run: "! grep -Ei 'password: |client_secret: ' /tmp/rendered.yaml"
+  images:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - { name: api, file: docker/service.Dockerfile, args: "SERVICE=api" }
+          - { name: collab, file: docker/service.Dockerfile, args: "SERVICE=collab" }
+          - { name: web, file: docker/web.Dockerfile, args: "" }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.file }}
+          build-args: ${{ matrix.args }}
+          push: false

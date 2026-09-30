@@ -6,8 +6,9 @@
   "scripts": {
     "typecheck": "tsc -p .",
     "test": "vitest run",
-    "build": "tsc -p .",
-    "start": "node --import tsx src/main.ts"
+    "build": "pnpm bundle",
+    "start": "node --import tsx src/main.ts",
+    "bundle": "esbuild src/main.ts --bundle --platform=node --format=esm --target=node22 --outfile=dist/main.js --banner:js=\"import{createRequire as __cr}from'node:module';const require=__cr(import.meta.url);\" --external:pg-native"
   },
   "dependencies": {
     "@hocuspocus/server": "^2.15.0",

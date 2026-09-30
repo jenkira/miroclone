@@ -1,3 +1,5 @@
+// PixiJS compiles shaders with new Function by default, which the Content Security Policy blocks (PRD section 7.4).
+import "pixi.js/unsafe-eval";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { api, type Me } from "./api.js";

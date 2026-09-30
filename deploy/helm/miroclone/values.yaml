@@ -1,9 +1,14 @@
-# Image locations. Override every registry for air-gapped installs.
+# Image locations. Override the registry for air-gapped installs, and override any image for a mirror.
 global:
   imageRegistry: registry.example.internal
   imagePullSecrets: []
 
 services:
+  web:
+    image: miroclone/web
+    tag: "0.1.0"
+    port: 8080
+    replicas: 2
   api:
     image: miroclone/api
     tag: "0.1.0"
@@ -14,12 +19,47 @@ services:
     tag: "0.1.0"
     port: 1234
     replicas: 2
+    # Seconds that a stopping pod keeps serving before SIGTERM, so the ingress stops sending it new sockets.
+    preStopSeconds: 20
+    terminationGracePeriodSeconds: 60
 
 entra:
   tenantId: ""
+  clientId: ""
+  # Must match the redirect URI on the Entra app registration.
+  redirectUri: ""
 
-# Secrets come from Passwordstate through ESO (PRD section 8.5). Map each
-# Kubernetes Secret key to a Passwordstate password ID. Never put values here.
+# PostgreSQL, run by CloudNativePG or a managed on-premises service.
+postgres:
+  host: ""
+  database: miroclone
+  # Turn off only for a test cluster. Connections use TLS and verify the server certificate.
+  tls: true
+
+redis:
+  host: ""
+
+ingress:
+  enabled: true
+  className: nginx
+  host: ""
+  tlsSecretName: miroclone-tls
+  # cert-manager settings, using the organisation's internal certificate authority.
+  clusterIssuer: ""
+  annotations: {}
+
+# Use Gateway API instead of an Ingress. Set ingress.enabled to false when you turn this on.
+gateway:
+  enabled: false
+  parentRefs: []
+
+autoscaling:
+  api: { enabled: true, minReplicas: 2, maxReplicas: 6, cpuPercent: 70 }
+  # The collaboration service scales on CPU until connection metrics are exported (see PRD section 8.6).
+  collab: { enabled: true, minReplicas: 2, maxReplicas: 10, cpuPercent: 60 }
+
+# Secrets come from Passwordstate through ESO (PRD section 8.5). Map each Kubernetes Secret key to a
+# Passwordstate password ID. Never put secret values in this file.
 externalSecrets:
   enabled: true
   refreshInterval: 1h
@@ -28,16 +68,20 @@ externalSecrets:
     name: passwordstate
   api:
     ENTRA_CLIENT_SECRET: ""
-    SESSION_SIGNING_KEY: ""
+    POSTGRES_USER: ""
     POSTGRES_PASSWORD: ""
+    REDIS_PASSWORD: ""
   collab:
-    SESSION_SIGNING_KEY: ""
+    POSTGRES_USER: ""
     POSTGRES_PASSWORD: ""
+    REDIS_PASSWORD: ""
 
-egress:
-  # Entra ID and Microsoft Graph, usually through the egress proxy.
-  cidrs: []
-
-# Labels that select the namespace of the cluster's ingress controller.
-ingressNamespaceLabels:
-  kubernetes.io/metadata.name: kube-system
+networkPolicy:
+  # Labels that select the namespace of the cluster's ingress controller.
+  ingressNamespaceLabels:
+    kubernetes.io/metadata.name: kube-system
+  # Entra ID and Microsoft Graph, usually through the egress proxy. List the proxy or address ranges.
+  entraEgressCidrs: []
+  # Raw "to" entries for NetworkPolicy egress rules.
+  postgresTo: []
+  redisTo: []

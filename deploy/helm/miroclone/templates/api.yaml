@@ -1,0 +1,10 @@
+{{- $env := list
+  (dict "name" "PORT" "value" (toString .Values.services.api.port))
+  (dict "name" "ENTRA_TENANT_ID" "value" (required "Set entra.tenantId" .Values.entra.tenantId))
+  (dict "name" "ENTRA_CLIENT_ID" "value" (required "Set entra.clientId" .Values.entra.clientId))
+  (dict "name" "ENTRA_REDIRECT_URI" "value" (required "Set entra.redirectUri" .Values.entra.redirectUri))
+  (dict "name" "POSTGRES_HOST" "value" (required "Set postgres.host" .Values.postgres.host))
+  (dict "name" "POSTGRES_DB" "value" .Values.postgres.database)
+  (dict "name" "POSTGRES_SSL" "value" (ternary "1" "0" .Values.postgres.tls))
+  (dict "name" "REDIS_HOST" "value" (required "Set redis.host" .Values.redis.host)) -}}
+{{ include "miroclone.workload" (dict "root" $ "name" "api" "svc" .Values.services.api "env" $env "secret" true "probePath" "/healthz" "readyPath" "/readyz") }}

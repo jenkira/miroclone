@@ -37,3 +37,5 @@ const app = buildApp({
   secureCookies: process.env.INSECURE_COOKIES !== "1",
 });
 await app.listen({ port: Number(process.env.PORT ?? 3000), host: "0.0.0.0" });
+
+process.once("SIGTERM", async () => { await app.close(); await db.end(); redis.disconnect(); process.exit(0); });

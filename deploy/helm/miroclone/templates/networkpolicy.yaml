@@ -1,35 +1,93 @@
+# Deny everything, then allow only the traffic that each component needs (PRD section 8.4).
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
-metadata: { name: default-deny }
+metadata:
+  name: default-deny
 spec:
   podSelector:
-    matchLabels: { app.kubernetes.io/part-of: miroclone }
+    matchLabels:
+      app.kubernetes.io/part-of: miroclone
   policyTypes: [Ingress, Egress]
-  egress:
-    - to: [{ namespaceSelector: {}, podSelector: { matchLabels: { k8s-app: kube-dns } } }]
-      ports: [{ port: 53, protocol: UDP }, { port: 53, protocol: TCP }]
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
-metadata: { name: api-egress-entra }
+metadata:
+  name: allow-dns
 spec:
   podSelector:
-    matchLabels: { app.kubernetes.io/name: api }
+    matchLabels:
+      app.kubernetes.io/part-of: miroclone
   policyTypes: [Egress]
   egress:
-    {{- range .Values.egress.cidrs }}
-    - to: [{ ipBlock: { cidr: {{ . | quote }} } }]
-      ports: [{ port: 443 }]
-    {{- end }}
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - { port: 53, protocol: UDP }
+        - { port: 53, protocol: TCP }
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
-metadata: { name: allow-ingress-controller }
+metadata:
+  name: allow-ingress-controller
 spec:
   podSelector:
-    matchLabels: { app.kubernetes.io/part-of: miroclone }
+    matchLabels:
+      app.kubernetes.io/part-of: miroclone
   policyTypes: [Ingress]
   ingress:
     - from:
         - namespaceSelector:
-            matchLabels: {{ toYaml .Values.ingressNamespaceLabels | nindent 14 }}
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.ingressNamespaceLabels | nindent 14 }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: api-egress-entra
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: api
+  policyTypes: [Egress]
+  egress:
+    {{- range .Values.networkPolicy.entraEgressCidrs }}
+    - to:
+        - ipBlock:
+            cidr: {{ . | quote }}
+      ports:
+        - { port: 443, protocol: TCP }
+    {{- end }}
+    {{- if not .Values.networkPolicy.entraEgressCidrs }}
+    []
+    {{- end }}
+{{- range $name := list "api" "collab" }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $name }}-egress-data
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: {{ $name }}
+  policyTypes: [Egress]
+  egress:
+    {{- with $.Values.networkPolicy.postgresTo }}
+    - to:
+        {{- toYaml . | nindent 8 }}
+      ports:
+        - { port: 5432, protocol: TCP }
+    {{- end }}
+    {{- with $.Values.networkPolicy.redisTo }}
+    - to:
+        {{- toYaml . | nindent 8 }}
+      ports:
+        - { port: 6379, protocol: TCP }
+    {{- end }}
+    {{- if not (or $.Values.networkPolicy.postgresTo $.Values.networkPolicy.redisTo) }}
+    []
+    {{- end }}
+{{- end }}

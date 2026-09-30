@@ -1,0 +1,12 @@
+# Placeholder values so CI can lint and render the chart. Not for real installs.
+entra: { tenantId: "00000000-0000-0000-0000-000000000000", clientId: "11111111-1111-1111-1111-111111111111", redirectUri: "https://board.example.internal/auth/callback" }
+postgres: { host: "pg-rw.data.svc" }
+redis: { host: "redis.data.svc" }
+ingress: { host: "board.example.internal" }
+networkPolicy:
+  entraEgressCidrs: ["10.0.0.0/24"]
+  postgresTo: [{ podSelector: { matchLabels: { "cnpg.io/cluster": pg } } }]
+  redisTo: [{ podSelector: { matchLabels: { app: redis } } }]
+externalSecrets:
+  api: { ENTRA_CLIENT_SECRET: "101", POSTGRES_USER: "102", POSTGRES_PASSWORD: "103", REDIS_PASSWORD: "104" }
+  collab: { POSTGRES_USER: "102", POSTGRES_PASSWORD: "103", REDIS_PASSWORD: "104" }

@@ -24,7 +24,7 @@ export function BoardView({ id, me }: { id: string; me: Me }) {
   const session = useMemo(() => {
     const doc = new Y.Doc();
     const proto = location.protocol === "https:" ? "wss" : "ws";
-    const socket = new HocuspocusProviderWebsocket({ url: `${proto}://${location.host}/collab` });
+    const socket = new HocuspocusProviderWebsocket({ url: `${proto}://${location.host}/collab/${id}` });
     // The session cookie is the credential. The provider needs some token, or the server never starts authentication.
     const provider = new HocuspocusProvider({ name: id, document: doc, websocketProvider: socket, token: "cookie" });
     provider.awareness?.setLocalStateField("user", { name: me.name, colour: colourFor(doc.clientID) });
