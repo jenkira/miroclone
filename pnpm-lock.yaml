@@ -230,6 +230,19 @@ importers:
         specifier: ^4.19.0
         version: 4.23.15
 
+  tools/miro-migrate:
+    dependencies:
+      '@miroclone/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
+      fractional-indexing:
+        specifier: ^4.0.0
+        version: 4.0.0
+    devDependencies:
+      tsx:
+        specifier: ^4.19.0
+        version: 4.23.15
+
 packages:
 
   '@aws-sdk/checksums@3.1001.1':

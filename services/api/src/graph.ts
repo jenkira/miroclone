@@ -32,6 +32,18 @@ export class GraphClient {
     ];
   }
 
+  /** Finds one person by exact email address, for matching migrated boards to their owners (MIG-5). */
+  async findUserByEmail(token: string, email: string): Promise<Person | undefined> {
+    // Anything that isn't a plain address can't match a person, and stays out of the filter.
+    if (!/^[^\s'"\\<>()]+@[^\s'"\\<>()]+$/.test(email)) return undefined;
+    const filter = encodeURIComponent(`mail eq '${email}' or userPrincipalName eq '${email}'`);
+    const r = await this.get<{ value: { id: string; displayName: string; mail?: string; userPrincipalName?: string }[] }>(
+      token, `/users?$filter=${filter}&$select=id,displayName,mail,userPrincipalName&$top=2`);
+    const want = email.toLowerCase();
+    const hit = r.value.find((u) => u.mail?.toLowerCase() === want || u.userPrincipalName?.toLowerCase() === want);
+    return hit && { type: "user", id: hit.id, name: hit.displayName, email: hit.mail ?? email };
+  }
+
   /** Resolves all group memberships for a user with more than 200 groups (IAM-9). */
   async memberGroups(token: string): Promise<string[]> {
     const ids: string[] = [];

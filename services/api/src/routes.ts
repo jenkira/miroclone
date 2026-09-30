@@ -10,6 +10,7 @@ import type { Scanner } from "./scanner.js";
 import type { OidcClient } from "./oidc.js";
 import { audit } from "./audit.js";
 import * as spaces from "./spaces.js";
+import { Conflict, importMigratedBoard } from "./migration.js";
 import * as boards from "./boards.js";
 import * as comments from "./comments.js";
 import * as workshop from "./workshop.js";
@@ -451,6 +452,29 @@ export function boardRoutes(app: FastifyInstance, opts: { db: Db; sessions: Sess
       audit({ action: "import", actor: req.session!.userId, boardId: id, detail: { objects: file.objects.length, classification } });
       return reply.code(201).send({ id });
     });
+
+    // Bulk import of boards converted by the Miro migration tool (MIG-5). One board for each call, so a large
+    // migration shows progress and one failure doesn't stop the rest.
+    api.post<{ Body: { board: string; classification: string; ownerEmail?: string; sourceId?: string; files?: { name: string; data: string }[] } }>(
+      "/api/admin/migration/import", { bodyLimit: 128 * 1024 * 1024 }, async (req, reply) => {
+        adminOnly(req);
+        if (typeof req.body?.board !== "string" || typeof req.body?.classification !== "string") throw new boards.Invalid("board and classification are required");
+        if (!(await isClassification(req.body.classification))) throw new boards.Invalid("unknown classification");
+        const token = await graphToken(req.session!).catch(() => undefined);
+        // Everyone here signed in to the one tenant, so the administrator's tenant is the tenant of the people they match.
+        const tenantId = (await db.query<{ tenant_id: string }>("SELECT tenant_id FROM users WHERE id = $1", [req.session!.userId])).rows[0]!.tenant_id;
+        try {
+          const r = await importMigratedBoard({
+            db, tenantId, classifications: (await config()).list, store: opts.store, scanner: opts.scanner,
+            findByEmail: async (email) => (token ? opts.graph.findUserByEmail(token, email) : undefined),
+          }, req.session!.userId, req.body);
+          audit({ action: "import", actor: req.session!.userId, boardId: r.id, detail: { source: "miro", sourceId: req.body.sourceId, classification: req.body.classification, owner: r.ownerId, ownerResolved: r.ownerResolved, objects: r.objects, images: r.images, imageProblems: r.imageProblems.length } });
+          return reply.code(201).send(r);
+        } catch (e) {
+          if (e instanceof Conflict) return reply.code(409).send({ error: "already_imported", message: e.message });
+          throw e;
+        }
+      });
 
     api.put<{ Params: { id: string }; Body: { starred: boolean } }>("/api/boards/:id/star", async (req) => {
       await boards.setStar(db, actorOf(req), req.params.id, !!req.body.starred);

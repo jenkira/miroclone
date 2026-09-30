@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, type ClassificationConfig, type Marking, type UsageStats } from "./api.js";
 import { Banner } from "./Banner.js";
+import { MigrationImport } from "./MigrationImport.js";
 
 const mb = (b: number) => `${(b / 1024 / 1024).toFixed(1)} MB`;
 
@@ -81,6 +82,7 @@ export function AdminPage() {
           <p role="status">{message}</p>
         </>
       )}
+      {cfg && <MigrationImport markings={cfg.list} fallback={cfg.default} />}
     </main>
   );
 }

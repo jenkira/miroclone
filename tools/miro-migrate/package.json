@@ -1,0 +1,20 @@
+{
+  "name": "@miroclone/miro-migrate",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Exports boards through the Miro REST API and converts them to Miroclone board files. Runs outside the PROTECTED environment.",
+  "bin": { "miro-migrate": "./src/cli.ts" },
+  "scripts": {
+    "typecheck": "tsc -p .",
+    "test": "vitest run",
+    "start": "node --import tsx src/cli.ts"
+  },
+  "dependencies": {
+    "@miroclone/shared": "workspace:*",
+    "fractional-indexing": "^4.0.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.0"
+  }
+}

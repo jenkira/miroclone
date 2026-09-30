@@ -14,6 +14,7 @@ export interface VoteState {
   mine: string[]; remaining: number;
   results: { objectId: string; count: number; voters?: string[] }[] | null;
 }
+export interface MigrationResult { id: string; ownerId: string; ownerResolved: boolean; objects: number; images: number; imageProblems: { name: string; reason: string }[] }
 export interface Marking { key: string; label: string; level: number; colour: string }
 export interface ClassificationConfig { list: Marking[]; default: string }
 export interface UsageStats {
@@ -58,6 +59,8 @@ export const api = {
   shareSpace: (id: string, p: Person, role: string) => call<unknown>("PUT", `/api/spaces/${id}/members`, { type: p.type, principalId: p.id, role, name: p.name }),
   unshareSpace: (id: string, m: { type: string; id: string }) => call<unknown>("DELETE", `/api/spaces/${id}/members/${m.type}/${encodeURIComponent(m.id)}`),
   moveToSpace: (id: string, spaceId: string | null) => call<unknown>("PUT", `/api/boards/${id}/space`, { spaceId }),
+  importMigrated: (body: { board: string; classification: string; ownerEmail?: string; sourceId?: string; files?: { name: string; data: string }[] }) =>
+    call<MigrationResult>("POST", "/api/admin/migration/import", body),
   uploadFile: async (boardId: string, file: Blob) => {
     const res = await fetch(`/api/boards/${boardId}/files`, { method: "POST", credentials: "same-origin", headers: { "content-type": file.type || "application/octet-stream" }, body: file });
     if (!res.ok) throw Object.assign(new Error(`${res.status}`), { status: res.status });
