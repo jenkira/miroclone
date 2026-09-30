@@ -11,6 +11,7 @@ export const objectTypes = [
   "connector",
   "frame",
   "image",
+  "card",
 ] as const;
 export type ObjectType = (typeof objectTypes)[number];
 
@@ -100,6 +101,22 @@ export const imageSchema = z.object({
   ]),
 });
 
+/** A date in the form 2026-09-30. */
+export const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine((v) => !Number.isNaN(Date.parse(v)), "Not a real date");
+
+/** A card with a title, description, assignee, due date, and tags (CNV-14). */
+export const cardSchema = z.object({
+  ...base,
+  type: z.literal("card"),
+  title: z.string().max(200).default(""),
+  description: z.string().max(2000).default(""),
+  /** The person's display name. A card doesn't grant access, so no account ID is stored. */
+  assignee: z.string().max(100).default(""),
+  due: isoDate.optional(),
+  tags: z.array(z.string().min(1).max(30)).max(10).default([]),
+  color: z.string().default("#ffffff"),
+});
+
 export const boardObjectSchema = z.discriminatedUnion("type", [
   stickySchema,
   shapeSchema,
@@ -108,6 +125,7 @@ export const boardObjectSchema = z.discriminatedUnion("type", [
   connectorSchema,
   frameSchema,
   imageSchema,
+  cardSchema,
 ]);
 export type BoardObject = z.infer<typeof boardObjectSchema>;
 

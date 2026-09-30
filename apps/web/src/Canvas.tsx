@@ -4,7 +4,7 @@ import type * as Y from "yjs";
 import type { Awareness } from "y-protocols/awareness";
 import { isSafeLink, Board, type BoardObject } from "@miroclone/shared";
 import { boundsOf } from "@miroclone/shared";
-import { hitHandle, hitTest, intersects, normaliseRect, resizeFromHandle, rotationFor, strokesHit, type Handle, type Point } from "./geometry.js";
+import { hitHandle, hitTest, intersects, normaliseRect, resizeFromHandle, rotationFor, snapBox, strokesHit, type Handle, type Point, type Rect } from "./geometry.js";
 import { drawCursor, drawObject, drawSelection, Scene, textHeight, withDefaults } from "./render.js";
 import { objectForGesture, type Tool } from "./tools.js";
 import { pinAt, type Pin } from "./pins.js";
@@ -25,6 +25,8 @@ export interface CanvasApi {
   /** Zooms to show a rectangle, as when presenting a frame (WSH-5). */
   showRect(r: { x: number; y: number; width: number; height: number }): void;
   viewport(): Viewport;
+  /** Size of the canvas on screen, in pixels. */
+  size(): { width: number; height: number };
   /** Sets the viewport, as when following another person (COL-6). It isn't reported as the user's own move. */
   setViewport(v: Viewport): void;
   /** Converts a world point to a point on screen, relative to the page. */
@@ -41,6 +43,8 @@ export interface CanvasProps {
   awareness?: Awareness;
   onToolDone?: () => void;
   apiRef?: { current: CanvasApi | null };
+  /** Drawn over the canvas, inside its frame, such as the minimap. */
+  overlay?: React.ReactNode;
   onSelect?: (ids: string[]) => void;
   /** Called with image files dropped on the canvas or pasted into it, and the world point to place them. */
   onFiles?: (files: File[], at: Point) => void;
@@ -85,9 +89,12 @@ export const clearClipboard = () => { clipboard = { objects: [] }; };
 const CURSOR_COLOURS = ["#e53935", "#8e24aa", "#3949ab", "#00897b", "#f4511e", "#6d4c41"];
 export const colourFor = (id: number) => CURSOR_COLOURS[id % CURSOR_COLOURS.length]!;
 
+/** Distance, in screen pixels, within which a dragged object snaps to another object's edge or centre (CNV-12). */
+const SNAP_PX = 6;
+
 type Gesture =
   | { kind: "pan"; last: { x: number; y: number } }
-  | { kind: "move"; last: Point }
+  | { kind: "move"; start: Point; applied: Point; box: Rect; others: Rect[] }
   | { kind: "draw"; path: Point[] }
   | { kind: "marquee"; path: Point[] }
   | { kind: "erase" }
@@ -96,7 +103,7 @@ type Gesture =
 
 const resizable = (o: BoardObject) => o.type !== "connector" && o.type !== "stroke";
 
-export function Canvas({ board, tool, readOnly, awareness, onToolDone, apiRef, onSelect, onFiles, pins, selectedPin, onPinClick, onComment, canComment, badges, onVote, canVote, onViewChange, boardId, classification, onPasteCheck }: CanvasProps) {
+export function Canvas({ board, tool, readOnly, awareness, onToolDone, apiRef, onSelect, onFiles, pins, selectedPin, onPinClick, onComment, canComment, badges, onVote, canVote, onViewChange, boardId, classification, onPasteCheck, overlay }: CanvasProps) {
   const host = useRef<HTMLDivElement>(null);
   const toolRef = useRef(tool);
   const roRef = useRef(readOnly);
@@ -213,6 +220,7 @@ export function Canvas({ board, tool, readOnly, awareness, onToolDone, apiRef, o
         fitSelection: () => { const objs = selection.current.map((id) => board.get(id)).filter(Boolean) as BoardObject[]; if (objs.length) showRect(boundsOf(objs, 0)); },
         showRect: (r) => { source = "api"; showRect(r); },
         viewport: () => ({ ...view.current }),
+        size: () => ({ width: el.clientWidth, height: el.clientHeight }),
         setViewport: (v) => { view.current = { ...v }; source = "api"; apply(); },
         toScreen: (p) => { const b = el.getBoundingClientRect(); return { x: b.left + p.x * view.current.zoom + view.current.x, y: b.top + p.y * view.current.zoom + view.current.y }; },
         viewCentre: () => screenToWorld(view.current, el.clientWidth / 2, el.clientHeight / 2),
@@ -293,7 +301,7 @@ export function Canvas({ board, tool, readOnly, awareness, onToolDone, apiRef, o
           // Ctrl or Cmd plus click follows a link.
           if ((e.ctrlKey || e.metaKey) && hit.type === "text" && hit.link && isSafeLink(hit.link)) { window.open(hit.link, "_blank", "noopener,noreferrer"); return; }
           setSel(board.expandGroups(selection.current.includes(hit.id) ? selection.current : e.shiftKey ? [...selection.current, hit.id] : [hit.id]));
-          gesture = ro ? { kind: "pan", last: { x: e.clientX, y: e.clientY } } : { kind: "move", last: p };
+          gesture = ro ? { kind: "pan", last: { x: e.clientX, y: e.clientY } } : startMove(p);
           if (!ro) board.undo.stopCapturing();
         } else {
           setSel([]);
@@ -306,6 +314,17 @@ export function Canvas({ board, tool, readOnly, awareness, onToolDone, apiRef, o
       gesture = { kind: "draw", path: [p] };
     };
 
+    /** Starts dragging the selection. The objects it could snap to are fixed at the start of the drag. */
+    const startMove = (p: Point): Gesture => {
+      const chosen = new Set(selection.current);
+      const moving = board.list().filter((o) => chosen.has(o.id) && o.type !== "connector");
+      const others = board.list().filter((o) => !chosen.has(o.id) && o.type !== "connector" && o.type !== "stroke");
+      const x1 = Math.min(...moving.map((o) => o.x)), y1 = Math.min(...moving.map((o) => o.y));
+      const x2 = Math.max(...moving.map((o) => o.x + o.width)), y2 = Math.max(...moving.map((o) => o.y + o.height));
+      const box = moving.length ? { x: x1, y: y1, width: x2 - x1, height: y2 - y1 } : { x: 0, y: 0, width: 0, height: 0 };
+      return { kind: "move", start: p, applied: { x: 0, y: 0 }, box, others: moving.length ? others : [] };
+    };
+
     const move = (e: PointerEvent) => {
       const p = pos(e);
       if (awareness) awareness.setLocalStateField("cursor", { x: p.x, y: p.y });
@@ -315,8 +334,16 @@ export function Canvas({ board, tool, readOnly, awareness, onToolDone, apiRef, o
         view.current.x += e.clientX - g.last.x; view.current.y += e.clientY - g.last.y;
         g.last = { x: e.clientX, y: e.clientY }; apply();
       } else if (g.kind === "move") {
-        board.move(selection.current, p.x - g.last.x, p.y - g.last.y);
-        g.last = p;
+        // Work from the total distance dragged, so a snap can pull the object to a guide and then let go of it again.
+        let dx = p.x - g.start.x, dy = p.y - g.start.y;
+        clearPreview();
+        if (!e.altKey && g.others.length) {
+          const s = snapBox({ ...g.box, x: g.box.x + dx, y: g.box.y + dy }, g.others, SNAP_PX / view.current.zoom);
+          dx += s.dx; dy += s.dy;
+          for (const l of s.guides) preview.addChild(new Graphics().moveTo(l.x1, l.y1).lineTo(l.x2, l.y2).stroke({ width: 1 / view.current.zoom, color: 0xe91e63 }));
+        }
+        board.move(selection.current, dx - g.applied.x, dy - g.applied.y);
+        g.applied = { x: dx, y: dy };
       } else if (g.kind === "resize") {
         const o = board.get(g.id);
         if (o) board.update(g.id, resizeFromHandle(o, g.handle, p, e.shiftKey));
@@ -482,6 +509,7 @@ export function Canvas({ board, tool, readOnly, awareness, onToolDone, apiRef, o
   return (
     <div style={{ position: "relative", flex: 1, minHeight: 0 }}>
       <div ref={host} style={{ position: "absolute", inset: 0 }} role="application" aria-label="Board canvas" tabIndex={0} />
+      {overlay}
       {editing && (
         <textarea
           autoFocus

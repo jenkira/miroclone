@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { boardObjectSchema, isSafeLink, MAX_OBJECTS_PER_BOARD, type BoardObject } from "./objects.js";
-import { listLines } from "./text.js";
+import { formatDue, listLines, wrapText } from "./text.js";
 import { findClassification, type Classification } from "./classification.js";
 
 const esc = (s: string) =>
@@ -37,6 +37,23 @@ function shapeMarkup(o: BoardObject, byId: Map<string, BoardObject>, images: Rec
   switch (o.type) {
     case "sticky":
       return `<rect x="${o.x}" y="${o.y}" width="${o.width}" height="${o.height}" fill="${colour(o.color, "#fff475")}" stroke="#bdbdbd"/>${t(o.text)}`;
+    case "card": {
+      const chars = Math.max(8, Math.floor((o.width - 24) / 8));
+      const lines: { text: string; bold?: boolean; fill?: string; size: number }[] = [];
+      for (const l of wrapText(o.title || "Untitled card", chars)) lines.push({ text: l, bold: true, size: 16 });
+      const meta = [o.assignee && `Assigned to ${o.assignee}`, o.due && `Due ${formatDue(o.due)}`].filter(Boolean).join("  ·  ");
+      if (meta) lines.push({ text: meta, size: 12, fill: "#455a64" });
+      if (o.tags.length) lines.push({ text: o.tags.map((t) => `#${t}`).join(" "), size: 12, fill: "#1565c0" });
+      if (o.description) for (const l of wrapText(o.description, chars)) lines.push({ text: l, size: 13 });
+      let y = o.y + 8;
+      const rows: string[] = [];
+      for (const l of lines) {
+        y += l.size * 1.3;
+        if (y > o.y + o.height - 4) break;
+        rows.push(`<text x="${o.x + 12}" y="${y}" font-size="${l.size}" font-family="sans-serif" font-weight="${l.bold ? 700 : 400}" fill="${l.fill ?? "#1a1a1a"}">${esc(l.text)}</text>`);
+      }
+      return `<rect x="${o.x}" y="${o.y}" width="${o.width}" height="${o.height}" rx="6" fill="${colour(o.color, "#fff")}" stroke="#9e9e9e"/>` + rows.join("");
+    }
     case "shape": {
       const fill = colour(o.fill, "#fff"), stroke = colour(o.stroke, "#1a1a1a");
       const a = `fill="${fill}" stroke="${stroke}" stroke-width="2"`;

@@ -1,7 +1,7 @@
 import type { BoardObject } from "@miroclone/shared";
 import { hitTest, normaliseRect, strokeFromPoints, type Point } from "./geometry.js";
 
-export const tools = ["select", "sticky", "rectangle", "ellipse", "diamond", "text", "pen", "highlighter", "eraser", "connector", "frame", "comment", "vote"] as const;
+export const tools = ["select", "sticky", "card", "rectangle", "ellipse", "diamond", "text", "pen", "highlighter", "eraser", "connector", "frame", "comment", "vote"] as const;
 export type Tool = (typeof tools)[number];
 
 export type NewObject = Record<string, unknown> & { type: BoardObject["type"] };
@@ -25,6 +25,8 @@ export function objectForGesture(
   switch (tool) {
     case "sticky":
       return { type: "sticky", x: start.x - 80, y: start.y - 80, width: 160, height: 160, text: "" };
+    case "card":
+      return { type: "card", x: start.x - 120, y: start.y - 80, width: 240, height: 160, title: "New card" };
     case "text":
       return { type: "text", x: start.x, y: start.y, width: 200, height: 40, text: "" };
     case "rectangle":

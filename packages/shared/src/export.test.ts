@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import { Board } from "./board-ops.js";
 import { boundsOf, exportJson, rotatedExtent, exportSvg, importJson } from "./export.js";
+import { boardObjectSchema } from "./objects.js";
+import { boardText } from "./search-text.js";
 
 function sample() {
   const b = new Board(new Y.Doc());
@@ -107,5 +109,31 @@ describe("board JSON", () => {
     expect(() => importJson("not json")).toThrow("valid JSON");
     expect(() => importJson(JSON.stringify({ format: "other" }))).toThrow("isn't a Miroclone board");
     expect(() => importJson(exportJson([], { title: "T", classification: "SECRET" }))).toThrow();
+  });
+});
+
+describe("cards (CNV-14)", () => {
+  const card = { id: "c1", type: "card" as const, x: 0, y: 0, width: 240, height: 200, rotation: 0, index: "a0", locked: false, title: "Fix <login>", description: "Users can't sign in after a reset", assignee: "Ann Author", due: "2026-09-30", tags: ["bug", "p1"], color: "#ffffff" };
+  it("draws the title, assignee, due date, tags, and description, with markup escaped", () => {
+    const svg = exportSvg([card], { classification: "OFFICIAL" });
+    expect(svg).toContain("Fix &lt;login&gt;");
+    expect(svg).toContain("Assigned to Ann Author");
+    expect(svg).toContain("Due 30 September 2026");
+    expect(svg).toContain("#bug #p1");
+    expect(svg).toContain("Users can&#39;t sign in");
+    expect(svg).not.toContain("<login>");
+  });
+  it("stops drawing lines that would run outside the card", () => {
+    const svg = exportSvg([{ ...card, height: 40, description: "x ".repeat(200) }], { classification: "OFFICIAL" });
+    expect((svg.match(/<text /g) ?? []).length).toBeLessThan(6);
+  });
+  it("rejects a due date that isn't a date", () => {
+    expect(boardObjectSchema.safeParse({ ...card, due: "2026-13-45" }).success).toBe(false);
+    expect(boardObjectSchema.safeParse({ ...card, due: "tomorrow" }).success).toBe(false);
+    expect(boardObjectSchema.safeParse(card).success).toBe(true);
+  });
+  it("finds a card by its text", () => {
+    expect(boardText([card])).toContain("Ann Author");
+    expect(boardText([card])).toContain("bug");
   });
 });

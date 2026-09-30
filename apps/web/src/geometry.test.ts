@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { centreOf, containsRotated, handlePositions, hitHandle, resizeFromHandle, rotatePoint, rotationFor } from "./geometry.js";
+import { centreOf, containsRotated, handlePositions, hitHandle, resizeFromHandle, rotatePoint, rotationFor, snapBox } from "./geometry.js";
 import { fitRect, MAX_ZOOM, MIN_ZOOM } from "./viewport.js";
 
 const close = (a: { x: number; y: number }, b: { x: number; y: number }) => {
@@ -68,5 +68,32 @@ describe("fitRect", () => {
   it("clamps zoom for tiny and huge content", () => {
     expect(fitRect({ x: 0, y: 0, width: 1, height: 1 }, 1000, 1000).zoom).toBe(MAX_ZOOM);
     expect(fitRect({ x: 0, y: 0, width: 1e7, height: 1e7 }, 1000, 1000).zoom).toBe(MIN_ZOOM);
+  });
+});
+
+describe("snapBox (CNV-12)", () => {
+  const other = { x: 100, y: 100, width: 100, height: 50 };
+  it("snaps a left edge to another object's left edge, within the threshold", () => {
+    const r = snapBox({ x: 103, y: 400, width: 40, height: 40 }, [other], 6);
+    expect(r.dx).toBe(-3);
+    expect(r.dy).toBe(0);
+    expect(r.guides).toEqual([{ x1: 100, x2: 100, y1: 100, y2: 440 }]);
+  });
+  it("snaps centres together on both axes at once", () => {
+    const r = snapBox({ x: 130, y: 203, width: 40, height: 40 }, [other, { x: 500, y: 223, width: 10, height: 10 }], 6);
+    // The centre x of 150 matches the first object, and the centre y of 223 matches the top edge of the second.
+    expect(r.dx).toBe(0);
+    expect(r.dy).toBe(0);
+    expect(r.guides.length).toBeGreaterThan(0);
+  });
+  it("does nothing beyond the threshold", () => {
+    expect(snapBox({ x: 300, y: 300, width: 30, height: 30 }, [other], 6)).toEqual({ dx: 0, dy: 0, guides: [] });
+  });
+  it("picks the closest match", () => {
+    const r = snapBox({ x: 104, y: 0, width: 10, height: 10 }, [other, { x: 102, y: 300, width: 10, height: 10 }], 6);
+    expect(r.dx).toBe(-2);
+  });
+  it("does nothing when there is nothing to snap to", () => {
+    expect(snapBox({ x: 0, y: 0, width: 10, height: 10 }, [], 6)).toEqual({ dx: 0, dy: 0, guides: [] });
   });
 });

@@ -120,3 +120,36 @@ export function strokesHit(objects: readonly BoardObject[], p: Point, radius = 8
     return false;
   }).map((o) => o.id);
 }
+
+export interface Guide { x1: number; y1: number; x2: number; y2: number }
+
+/** Edges and centre lines of a rectangle, along one axis. */
+const lines = (r: Rect, axis: "x" | "y") => axis === "x" ? [r.x, r.x + r.width / 2, r.x + r.width] : [r.y, r.y + r.height / 2, r.y + r.height];
+
+/**
+ * Finds the nudge that lines a moving box up with nearby boxes (CNV-12). It compares left, centre, and right edges,
+ * and top, middle, and bottom edges, and picks the closest match within `threshold` on each axis.
+ * The guides run between the matched boxes, so a person sees what the box snapped to.
+ */
+export function snapBox(box: Rect, others: readonly Rect[], threshold: number): { dx: number; dy: number; guides: Guide[] } {
+  const best = (axis: "x" | "y") => {
+    let found: { delta: number; at: number } | undefined;
+    for (const o of others) for (const a of lines(box, axis)) for (const b of lines(o, axis)) {
+      const delta = b - a;
+      if (Math.abs(delta) <= threshold && (!found || Math.abs(delta) < Math.abs(found.delta))) found = { delta, at: b };
+    }
+    return found;
+  };
+  const bx = best("x"), by = best("y");
+  const dx = bx?.delta ?? 0, dy = by?.delta ?? 0;
+  const moved = { ...box, x: box.x + dx, y: box.y + dy };
+  const guides: Guide[] = [];
+  const eps = 0.5;
+  if (bx) for (const o of others) if (lines(o, "x").some((l) => Math.abs(l - bx.at) < eps)) {
+    guides.push({ x1: bx.at, x2: bx.at, y1: Math.min(o.y, moved.y), y2: Math.max(o.y + o.height, moved.y + moved.height) });
+  }
+  if (by) for (const o of others) if (lines(o, "y").some((l) => Math.abs(l - by.at) < eps)) {
+    guides.push({ y1: by.at, y2: by.at, x1: Math.min(o.x, moved.x), x2: Math.max(o.x + o.width, moved.x + moved.width) });
+  }
+  return { dx, dy, guides };
+}

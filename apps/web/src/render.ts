@@ -1,6 +1,6 @@
 import { CanvasTextMetrics, Container, Graphics, Sprite, Text, TextStyle } from "pixi.js";
 import type * as Y from "yjs";
-import { boardObjectSchema, isSafeLink, listLines, type Board, type BoardObject } from "@miroclone/shared";
+import { boardObjectSchema, formatDue, isOverdue, isSafeLink, listLines, type Board, type BoardObject } from "@miroclone/shared";
 import { handlePositions } from "./geometry.js";
 import { imageLoader } from "./images.js";
 
@@ -49,6 +49,28 @@ function drawFormattedText(c: Container, o: Extract<BoardObject, { type: "text" 
   return t;
 }
 
+/** Today's date as 2026-09-30, in the viewer's time zone. */
+const todayIso = () => new Date().toLocaleDateString("en-CA");
+
+/** Draws a card: title, assignee and due date, tags, then description. Lines that don't fit are left out (CNV-14). */
+function drawCard(c: Container, g: Graphics, o: Extract<BoardObject, { type: "card" }>) {
+  g.roundRect(0, 0, o.width, o.height, 6).fill(hex(o.color)).stroke({ width: 1, color: 0x9e9e9e });
+  let y = 8;
+  const add = (text: string, size: number, fill: number, bold = false) => {
+    if (!text || y >= o.height - 8) return;
+    const t = new Text({ text, style: { fontSize: size, fontWeight: bold ? "700" : "400", fill, wordWrap: true, wordWrapWidth: o.width - 24 } });
+    if (y + t.height > o.height - 4) { t.destroy(); y = o.height; return; }
+    t.position.set(12, y);
+    c.addChild(t);
+    y += t.height + 4;
+  };
+  add(o.title || "Untitled card", 16, 0x1a1a1a, true);
+  add(o.assignee ? `Assigned to ${o.assignee}` : "", 12, 0x455a64);
+  if (o.due) add(`${isOverdue(o.due, todayIso()) ? "Overdue: " : "Due "}${formatDue(o.due)}`, 12, isOverdue(o.due, todayIso()) ? 0xc62828 : 0x455a64, isOverdue(o.due, todayIso()));
+  add(o.tags.map((t) => `#${t}`).join(" "), 12, 0x1565c0);
+  add(o.description, 13, 0x1a1a1a);
+}
+
 export interface Drawn { node: Container; text?: Text }
 
 /** Draws one board object into a display container. */
@@ -76,6 +98,9 @@ export function drawObject(o: BoardObject, board: Board): Drawn {
     case "sticky":
       g.rect(0, 0, o.width, o.height).fill(hex(o.color)).stroke({ width: 1, color: 0xbdbdbd });
       label(o.text, o.width, o.height, true);
+      break;
+    case "card":
+      drawCard(c, g, o);
       break;
     case "shape": {
       const { width: w, height: h } = o;

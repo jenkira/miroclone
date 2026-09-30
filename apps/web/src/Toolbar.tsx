@@ -1,7 +1,7 @@
 import { tools, type Tool } from "./tools.js";
 
 const labels: Record<Tool, string> = {
-  select: "Select", sticky: "Sticky note", rectangle: "Rectangle", ellipse: "Ellipse", diamond: "Diamond",
+  select: "Select", sticky: "Sticky note", card: "Card", rectangle: "Rectangle", ellipse: "Ellipse", diamond: "Diamond",
   text: "Text", pen: "Pen", highlighter: "Highlighter", eraser: "Eraser", connector: "Connector", frame: "Frame", comment: "Comment", vote: "Vote",
 };
 

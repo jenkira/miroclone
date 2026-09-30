@@ -1,10 +1,13 @@
 import { HocuspocusProvider, HocuspocusProviderWebsocket } from "@hocuspocus/provider";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { Viewport } from "./viewport.js";
 import * as Y from "yjs";
 import { Board } from "@miroclone/shared";
 import { api, type BoardSummary, type Me, type Thread } from "./api.js";
 import { Banner } from "./Banner.js";
 import { Canvas, colourFor, type CanvasApi } from "./Canvas.js";
+import { CardBar } from "./CardBar.js";
+import { Minimap } from "./Minimap.js";
 import { FormatBar } from "./FormatBar.js";
 import { CommentsPanel } from "./CommentsPanel.js";
 import { ExportMenu } from "./ExportMenu.js";
@@ -32,6 +35,9 @@ export function BoardView({ id, me }: { id: string; me: Me }) {
   const [tool, setTool] = useState<Tool>("select");
   const [status, setStatus] = useState<Status>("connecting");
   const apiRef = useRef<CanvasApi | null>(null);
+  // Viewport changes go to the minimap without re-rendering this view on every pan frame.
+  const viewSubs = useRef(new Set<(v: Viewport) => void>());
+  const subscribeView = useCallback((fn: (v: Viewport) => void) => { viewSubs.current.add(fn); return () => { viewSubs.current.delete(fn); }; }, []);
   const [selected, setSelected] = useState<string[]>([]);
   const [sharing, setSharing] = useState(false);
   const [notice, setNotice] = useState("");
@@ -65,7 +71,7 @@ export function BoardView({ id, me }: { id: string; me: Me }) {
     provider.awareness?.setLocalStateField("user", { name: me.name, colour: colourFor(doc.clientID) });
     const board = new Board(doc, doc.clientID);
     // End-to-end tests read the board through this hook. It exists only in the development server.
-    if (import.meta.env.DEV) Object.assign(window, { __board: board, __provider: provider });
+    if (import.meta.env.DEV) Object.assign(window, { __board: board, __provider: provider, __api: apiRef });
     return { doc, provider, socket, board };
   }, [id, me.name]);
 
@@ -182,13 +188,15 @@ export function BoardView({ id, me }: { id: string; me: Me }) {
       {notice && <p role="alert" style={{ margin: 0, padding: "2px 8px", background: "#fff3e0" }}>{notice}</p>}
       <Toolbar tool={tool} onChange={(t) => { setTool(t); if (t === "comment") setShowComments(true); if (t === "vote") setPanel("voting"); }} disabled={readOnly} canComment={canComment} canVote={canComment} />
       <FormatBar board={session.board} selection={selected} readOnly={readOnly} api={apiRef} />
+      <CardBar board={session.board} selection={selected} readOnly={readOnly} />
       <WorkshopBar w={w} />
       <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
         <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
           <Canvas boardId={id} classification={meta.classification} onPasteCheck={checkPaste} apiRef={apiRef} onSelect={setSelected} onFiles={addImages} board={session.board} tool={tool} readOnly={readOnly} awareness={session.provider.awareness ?? undefined}
             onToolDone={() => setTool("select")}
             pins={pins} selectedPin={selectedThread} canComment={canComment}
-            badges={voting.badges} canVote={canComment && voting.open} onVote={(oid, remove) => void voting.cast(oid, remove)} onViewChange={w.onViewChange}
+            badges={voting.badges} canVote={canComment && voting.open} onVote={(oid, remove) => void voting.cast(oid, remove)} onViewChange={(v, source) => { w.onViewChange(v, source); viewSubs.current.forEach((f) => f(v)); }}
+            overlay={<Minimap board={session.board} api={apiRef} subscribe={subscribeView} />}
             onPinClick={(tid) => { setSelectedThread(tid); setShowComments(true); }}
             onComment={(at) => { setPending(at); setShowComments(true); }} />
         </div>
