@@ -1,9 +1,16 @@
 import { useEffect, useRef, useState } from "react";
 import { boardRoles } from "@miroclone/shared";
 import { api, type Member, type Person } from "./api.js";
+import { useClassifications } from "./classifications.js";
 
 /** Lets an owner share a board with people and Entra groups, and change or remove access (IAM-5, IAM-6). */
-export function ShareDialog({ boardId, onClose }: { boardId: string; onClose: () => void }) {
+export function ShareDialog({ boardId, classification, onClose }: { boardId: string; classification?: string; onClose: () => void }) {
+  const cfg = useClassifications();
+  const level = (k?: string) => cfg.list.find((c) => c.key === k)?.level ?? 0;
+  // PROTECTED boards can't be visible to the whole organisation (IAM-8).
+  const protectedBoard = level(classification) >= (cfg.list.find((c) => c.key === "PROTECTED")?.level ?? 2);
+  const [orgRole, setOrgRole] = useState<string>("");
+  useEffect(() => { api.visibility(boardId).then((v) => setOrgRole(v.role ?? "")).catch(() => {}); }, [boardId]);
   const [members, setMembers] = useState<Member[]>([]);
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<Person[]>([]);
@@ -59,6 +66,22 @@ export function ShareDialog({ boardId, onClose }: { boardId: string; onClose: ()
               </select>{" "}
               <button onClick={() => run(() => api.unshare(boardId, m))}>Remove</button>
             </li>
+          ))}
+        </ul>
+        <h3>Everyone in the organisation</h3>
+        <label>Default role{" "}
+          <select aria-label="Organisation-wide role" value={orgRole} disabled={protectedBoard}
+            onChange={(e) => run(async () => { await api.setVisibility(boardId, e.target.value || null); setOrgRole(e.target.value); })}>
+            <option value="">No access</option>
+            {["viewer", "commenter", "editor"].map((r) => <option key={r}>{r}</option>)}
+          </select>
+        </label>
+        {protectedBoard && <p>A PROTECTED board can't be visible to the whole organisation.</p>}
+        <h3>Transfer ownership</h3>
+        <p>Choose a person from the list above. You become an editor.</p>
+        <ul aria-label="Transfer ownership">
+          {members.filter((m) => m.type === "user" && m.role !== "owner").map((m) => (
+            <li key={m.id}>{m.name} <button onClick={() => { if (confirm(`Make ${m.name} the owner of this board? You become an editor.`)) void run(() => api.transfer(boardId, m.id)); }}>Make owner</button></li>
           ))}
         </ul>
         <p role="alert">{message}</p>

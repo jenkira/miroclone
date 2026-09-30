@@ -201,7 +201,7 @@ export function BoardView({ id, me }: { id: string; me: Me }) {
         )}
       </div>
       <Banner classification={meta.classification} />
-      {sharing && <ShareDialog boardId={id} onClose={() => setSharing(false)} />}
+      {sharing && <ShareDialog boardId={id} classification={meta.classification} onClose={() => setSharing(false)} />}
     </div>
   );
 }

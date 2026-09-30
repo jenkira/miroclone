@@ -22,7 +22,8 @@ export interface UsageStats {
   storage: { documentBytes: number; versionBytes: number; fileBytes: number; fileCount: number };
   activity: { comments: number; templates: number };
 }
-export interface BoardSummary { id: string; title: string; classification: string; role: string; starred: boolean; updated_at: string }
+export interface BoardSummary { id: string; title: string; classification: string; role: string; starred: boolean; updated_at: string; space_id?: string | null }
+export interface Space { id: string; name: string; role: string; boards: number }
 
 async function call<T>(method: string, url: string, body?: unknown): Promise<T> {
   const res = await fetch(url, {
@@ -47,6 +48,16 @@ export const api = {
   members: (id: string) => call<Member[]>("GET", `/api/boards/${id}/members`),
   share: (id: string, p: Person, role: string) => call<unknown>("PUT", `/api/boards/${id}/members`, { type: p.type, principalId: p.id, role, name: p.name }),
   unshare: (id: string, m: { type: string; id: string }) => call<unknown>("DELETE", `/api/boards/${id}/members/${m.type}/${encodeURIComponent(m.id)}`),
+  visibility: (id: string) => call<{ role: string | null }>("GET", `/api/boards/${id}/visibility`),
+  setVisibility: (id: string, role: string | null) => call<unknown>("PUT", `/api/boards/${id}/visibility`, { role }),
+  transfer: (id: string, userId: string) => call<unknown>("POST", `/api/boards/${id}/transfer`, { userId }),
+  spaces: () => call<Space[]>("GET", "/api/spaces"),
+  createSpace: (name: string) => call<{ id: string }>("POST", "/api/spaces", { name }),
+  deleteSpace: (id: string) => call<unknown>("DELETE", `/api/spaces/${id}`),
+  spaceMembers: (id: string) => call<Member[]>("GET", `/api/spaces/${id}/members`),
+  shareSpace: (id: string, p: Person, role: string) => call<unknown>("PUT", `/api/spaces/${id}/members`, { type: p.type, principalId: p.id, role, name: p.name }),
+  unshareSpace: (id: string, m: { type: string; id: string }) => call<unknown>("DELETE", `/api/spaces/${id}/members/${m.type}/${encodeURIComponent(m.id)}`),
+  moveToSpace: (id: string, spaceId: string | null) => call<unknown>("PUT", `/api/boards/${id}/space`, { spaceId }),
   uploadFile: async (boardId: string, file: Blob) => {
     const res = await fetch(`/api/boards/${boardId}/files`, { method: "POST", credentials: "same-origin", headers: { "content-type": file.type || "application/octet-stream" }, body: file });
     if (!res.ok) throw Object.assign(new Error(`${res.status}`), { status: res.status });

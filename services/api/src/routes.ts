@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import * as Y from "yjs";
-import { atLeast, boardRoles, builtinTemplates, compareClassification, importJson, isDowngrade, OBJECTS_MAP, type BoardRole } from "@miroclone/shared";
-import { appendUpdate, deleteVersion, listVersions, openTokens, sealTokens, searchBoards, snapshot, versionState } from "@miroclone/server-core";
+import { atLeast, boardRoles, builtinTemplates, compareClassification, exportSvg, importJson, isDowngrade, OBJECTS_MAP, type BoardRole } from "@miroclone/shared";
+import { appendUpdate, deleteVersion, loadDoc, listVersions, openTokens, sealTokens, searchBoards, snapshot, versionState } from "@miroclone/server-core";
 import { createHash, randomUUID } from "node:crypto";
 import type { GraphClient } from "./graph.js";
 import { detectImageType, MAX_UPLOAD_BYTES, svgProblem } from "./files.js";
@@ -9,6 +9,7 @@ import type { ObjectStore } from "@miroclone/server-core";
 import type { Scanner } from "./scanner.js";
 import type { OidcClient } from "./oidc.js";
 import { audit } from "./audit.js";
+import * as spaces from "./spaces.js";
 import * as boards from "./boards.js";
 import * as comments from "./comments.js";
 import * as workshop from "./workshop.js";
@@ -235,6 +236,79 @@ export function boardRoutes(app: FastifyInstance, opts: { db: Db; sessions: Sess
         audit({ action: "classification_change", actor: req.session!.userId, boardId: req.params.id, detail: { ...change, reason: req.body.reason } });
         return change;
       });
+
+    // A small preview of the board for the dashboard (BRD-2). It skips images, so the call stays cheap.
+    // The response holds the board's content, so it follows the same access rules as the board.
+    api.get<{ Params: { id: string } }>("/api/boards/:id/thumbnail", async (req, reply) => {
+      const role = await boards.roleOnBoard(db, actorOf(req), req.params.id);
+      if (!role) throw new boards.NotFound();
+      const { rows } = await db.query<{ classification: string }>("SELECT classification FROM boards WHERE id = $1", [req.params.id]);
+      const doc = await loadDoc(db, req.params.id);
+      const objs = [...doc.getMap(OBJECTS_MAP).values()] as never[];
+      const svg = objs.length
+        ? exportSvg(objs, { classification: rows[0]!.classification, classifications: (await config()).list })
+        : `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 4 3"><rect width="4" height="3" fill="#f5f5f5"/></svg>`;
+      return reply
+        .header("content-type", "image/svg+xml")
+        .header("x-content-type-options", "nosniff")
+        .header("content-security-policy", "default-src 'none'; style-src 'unsafe-inline'; sandbox")
+        .header("cache-control", "private, max-age=60")
+        .send(svg);
+    });
+
+    // Organisation-wide visibility (IAM-8).
+    api.get<{ Params: { id: string } }>("/api/boards/:id/visibility", async (req) =>
+      ({ role: await boards.getOrgVisibility(db, actorOf(req), req.params.id) }));
+
+    api.put<{ Params: { id: string }; Body: { role: "viewer" | "commenter" | "editor" | null } }>(
+      "/api/boards/:id/visibility", async (req) => {
+        await boards.setOrgVisibility(db, actorOf(req), req.params.id, req.body.role ?? null, (await config()).list);
+        audit({ action: "share_change", actor: req.session!.userId, boardId: req.params.id, detail: { type: "organisation", role: req.body.role ?? null } });
+        return { ok: true };
+      });
+
+    // Ownership transfer and administrator reassignment (BRD-5).
+    api.post<{ Params: { id: string }; Body: { userId: string } }>("/api/boards/:id/transfer", async (req) => {
+      if (!req.body?.userId) throw new boards.Invalid("userId is required");
+      const r = await boards.transferOwnership(db, { ...actorOf(req), isAdmin: req.session!.isAdmin }, req.params.id, { id: req.body.userId });
+      audit({ action: "share_change", actor: req.session!.userId, boardId: req.params.id, detail: { type: "ownership", newOwner: req.body.userId, previousOwners: r.from, byAdmin: req.session!.isAdmin } });
+      return { ok: true };
+    });
+
+    // Spaces (BRD-3).
+    api.get("/api/spaces", async (req) => spaces.listSpaces(db, actorOf(req)));
+    api.post<{ Body: { name: string } }>("/api/spaces", async (req, reply) => {
+      const id = await spaces.createSpace(db, actorOf(req), req.body?.name ?? "");
+      audit({ action: "share_change", actor: req.session!.userId, detail: { type: "space_create", spaceId: id } });
+      return reply.code(201).send({ id });
+    });
+    api.patch<{ Params: { id: string }; Body: { name: string } }>("/api/spaces/:id", async (req) => {
+      await spaces.renameSpace(db, actorOf(req), req.params.id, req.body?.name ?? ""); return { ok: true };
+    });
+    api.delete<{ Params: { id: string } }>("/api/spaces/:id", async (req) => {
+      await spaces.deleteSpace(db, actorOf(req), req.params.id);
+      audit({ action: "share_change", actor: req.session!.userId, detail: { type: "space_delete", spaceId: req.params.id } });
+      return { ok: true };
+    });
+    api.get<{ Params: { id: string } }>("/api/spaces/:id/members", async (req) => spaces.listSpaceMembers(db, actorOf(req), req.params.id));
+    api.put<{ Params: { id: string }; Body: { type: "user" | "group"; principalId: string; role: BoardRole; name?: string } }>(
+      "/api/spaces/:id/members", async (req) => {
+        const { type, principalId, role, name } = req.body;
+        await spaces.shareSpace(db, actorOf(req), req.params.id, { type, id: principalId, role, name });
+        audit({ action: "share_change", actor: req.session!.userId, detail: { type: "space_member", spaceId: req.params.id, principalType: type, principalId, role } });
+        return { ok: true };
+      });
+    api.delete<{ Params: { id: string; type: "user" | "group"; principalId: string } }>(
+      "/api/spaces/:id/members/:type/:principalId", async (req) => {
+        await spaces.unshareSpace(db, actorOf(req), req.params.id, { type: req.params.type, id: req.params.principalId });
+        audit({ action: "share_change", actor: req.session!.userId, detail: { type: "space_member", spaceId: req.params.id, principalType: req.params.type, principalId: req.params.principalId, role: null } });
+        return { ok: true };
+      });
+    api.put<{ Params: { id: string }; Body: { spaceId: string | null } }>("/api/boards/:id/space", async (req) => {
+      await spaces.moveBoard(db, actorOf(req), req.params.id, req.body?.spaceId ?? null);
+      audit({ action: "share_change", actor: req.session!.userId, boardId: req.params.id, detail: { type: "space_move", spaceId: req.body?.spaceId ?? null } });
+      return { ok: true };
+    });
 
     // --- Templates (WSH-1, WSH-2) ---
     api.get("/api/templates", async (req) => ({ builtin: builtinTemplates, organisation: await workshop.listOrgTemplates(db, actorOf(req)) }));

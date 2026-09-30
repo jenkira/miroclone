@@ -50,8 +50,8 @@ export async function searchBoards(db: Db, actor: Actor, input: string, limit = 
      FROM board_search s
      JOIN boards b ON b.id = s.board_id AND b.deleted_at IS NULL
      JOIN LATERAL (
-       SELECT m.role FROM board_members m
-       WHERE m.board_id = b.id AND ((m.principal_type = 'user' AND m.principal_id = $1) OR (m.principal_type = 'group' AND m.principal_id = ANY($2::text[])))
+       SELECT m.role FROM board_access m
+       WHERE m.board_id = b.id AND ((m.principal_type = 'user' AND m.principal_id = $1) OR (m.principal_type = 'group' AND m.principal_id = ANY($2::text[])) OR m.principal_type = 'org')
        ORDER BY CASE m.role WHEN 'owner' THEN 4 WHEN 'editor' THEN 3 WHEN 'commenter' THEN 2 ELSE 1 END DESC LIMIT 1
      ) acc ON true
      WHERE s.tsv @@ to_tsquery('simple', $3)
