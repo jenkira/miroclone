@@ -9,6 +9,8 @@ export interface Session {
   email?: string;
   isAdmin: boolean;
   groups: string[];
+  /** Graph tokens, encrypted. Never sent to the browser. */
+  graph?: string;
   createdAt: number;
   lastSeenAt: number;
 }
@@ -63,7 +65,7 @@ export class SessionManager {
     private now: () => number = () => Math.floor(Date.now() / 1000),
   ) {}
 
-  async create(user: Pick<Session, "userId" | "name" | "email" | "isAdmin" | "groups">): Promise<Session> {
+  async create(user: Pick<Session, "userId" | "name" | "email" | "isAdmin" | "groups" | "graph">): Promise<Session> {
     const t = this.now();
     const s: Session = { ...user, id: newId(), createdAt: t, lastSeenAt: t };
     await this.store.put(s);
@@ -83,6 +85,12 @@ export class SessionManager {
     s.lastSeenAt = t;
     await this.store.put(s);
     return s;
+  }
+
+  /** Replaces the sealed Graph tokens, for example after a refresh. */
+  async setGraph(id: string, graph: string): Promise<void> {
+    const s = await this.store.get(id);
+    if (s) await this.store.put({ ...s, graph });
   }
 
   destroy(id: string) { return this.store.delete(id); }

@@ -8,5 +8,5 @@ networkPolicy:
   postgresTo: [{ podSelector: { matchLabels: { "cnpg.io/cluster": pg } } }]
   redisTo: [{ podSelector: { matchLabels: { app: redis } } }]
 externalSecrets:
-  api: { ENTRA_CLIENT_SECRET: "101", POSTGRES_USER: "102", POSTGRES_PASSWORD: "103", REDIS_PASSWORD: "104" }
+  api: { ENTRA_CLIENT_SECRET: "101", SESSION_ENCRYPTION_KEY: "105", POSTGRES_USER: "102", POSTGRES_PASSWORD: "103", REDIS_PASSWORD: "104" }
   collab: { POSTGRES_USER: "102", POSTGRES_PASSWORD: "103", REDIS_PASSWORD: "104" }

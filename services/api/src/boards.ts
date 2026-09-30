@@ -113,14 +113,27 @@ export async function purgeExpired(db: Db): Promise<number> {
 
 export async function share(
   db: Db, actor: Actor, id: string,
-  p: { type: "user" | "group"; id: string; role: BoardRole },
+  p: { type: "user" | "group"; id: string; role: BoardRole; name?: string },
 ) {
   await require(db, actor, id, "owner");
   await db.query(
-    `INSERT INTO board_members VALUES ($1, $2, $3, $4)
-     ON CONFLICT (board_id, principal_type, principal_id) DO UPDATE SET role = $4`,
-    [id, p.type, p.id, p.role],
+    `INSERT INTO board_members (board_id, principal_type, principal_id, role, principal_name) VALUES ($1, $2, $3, $4, $5)
+     ON CONFLICT (board_id, principal_type, principal_id) DO UPDATE SET role = $4, principal_name = COALESCE($5, board_members.principal_name)`,
+    [id, p.type, p.id, p.role, p.name ?? null],
   );
+}
+
+export interface MemberRow { type: "user" | "group"; id: string; name: string; role: BoardRole }
+
+/** Lists who can open a board. Any member can see the list. */
+export async function listMembers(db: Db, actor: Actor, id: string): Promise<MemberRow[]> {
+  await require(db, actor, id, "viewer");
+  const { rows } = await db.query<MemberRow>(
+    `SELECT m.principal_type AS type, m.principal_id AS id, m.role,
+            COALESCE(m.principal_name, u.display_name, m.principal_id) AS name
+     FROM board_members m LEFT JOIN users u ON m.principal_type = 'user' AND u.id = m.principal_id
+     WHERE m.board_id = $1 ORDER BY m.role DESC, name`, [id]);
+  return rows;
 }
 
 export async function unshare(db: Db, actor: Actor, id: string, p: { type: "user" | "group"; id: string }) {

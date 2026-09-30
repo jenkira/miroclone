@@ -68,6 +68,8 @@ externalSecrets:
     name: passwordstate
   api:
     ENTRA_CLIENT_SECRET: ""
+    # 32 random bytes, base64 encoded. Encrypts Graph tokens in the session store.
+    SESSION_ENCRYPTION_KEY: ""
     POSTGRES_USER: ""
     POSTGRES_PASSWORD: ""
     REDIS_PASSWORD: ""

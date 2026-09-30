@@ -8,6 +8,8 @@ export interface EntraClaims {
   amr?: string[];
   /** Group object IDs. Group overage is handled through Microsoft Graph (IAM-9). */
   groups?: string[];
+  /** Present instead of `groups` when the user is in too many groups (overage). */
+  _claim_names?: { groups?: string };
   exp?: number;
 }
 

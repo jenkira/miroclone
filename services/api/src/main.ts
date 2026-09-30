@@ -1,9 +1,10 @@
 import pg from "pg";
 import { migrate } from "@miroclone/server-core";
 import { buildApp } from "./app.js";
+import { GraphClient } from "./graph.js";
 import { EntraOidcClient } from "./oidc.js";
 import { Redis } from "ioredis";
-import { defaultSessionPolicy, RedisSessionStore, SessionManager } from "@miroclone/server-core";
+import { defaultSessionPolicy, parseKey, RedisSessionStore, SessionManager } from "@miroclone/server-core";
 
 function required(name: string): string {
   const v = process.env[name];
@@ -33,6 +34,8 @@ const app = buildApp({
   tenantId,
   oidc,
   db,
+  graph: new GraphClient(),
+  tokenKey: parseKey(required("SESSION_ENCRYPTION_KEY")),
   sessions: new SessionManager(new RedisSessionStore(redis, defaultSessionPolicy.maxLifetimeSeconds)),
   secureCookies: process.env.INSECURE_COOKIES !== "1",
 });

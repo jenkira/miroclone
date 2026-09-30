@@ -1,4 +1,6 @@
 export interface Me { id: string; name: string; email?: string; isAdmin: boolean }
+export interface Person { type: "user" | "group"; id: string; name: string; email?: string }
+export interface Member { type: "user" | "group"; id: string; name: string; role: string }
 export interface BoardSummary { id: string; title: string; classification: string; role: string; starred: boolean; updated_at: string }
 
 async function call<T>(method: string, url: string, body?: unknown): Promise<T> {
@@ -20,6 +22,10 @@ export const api = {
   deleteBoard: (id: string) => call<unknown>("DELETE", `/api/boards/${id}`),
   restoreBoard: (id: string) => call<unknown>("POST", `/api/boards/${id}/restore`),
   star: (id: string, starred: boolean) => call<unknown>("PUT", `/api/boards/${id}/star`, { starred }),
+  people: (q: string) => call<Person[]>("GET", `/api/people?q=${encodeURIComponent(q)}`),
+  members: (id: string) => call<Member[]>("GET", `/api/boards/${id}/members`),
+  share: (id: string, p: Person, role: string) => call<unknown>("PUT", `/api/boards/${id}/members`, { type: p.type, principalId: p.id, role, name: p.name }),
+  unshare: (id: string, m: { type: string; id: string }) => call<unknown>("DELETE", `/api/boards/${id}/members/${m.type}/${encodeURIComponent(m.id)}`),
   recordExport: (id: string, format: string, scope = "board") => call<unknown>("POST", `/api/boards/${id}/exports`, { format, scope }),
   importBoard: (file: string, classification?: string) => call<{ id: string }>("POST", "/api/boards/import", { file, classification }),
   logout: () => call<unknown>("POST", "/auth/logout"),

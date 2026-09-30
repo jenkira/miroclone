@@ -1,6 +1,8 @@
 import Fastify from "fastify";
 import cookie from "@fastify/cookie";
 import { validateClaims, type EntraClaims } from "@miroclone/shared";
+import { sealTokens } from "@miroclone/server-core";
+import type { GraphClient } from "./graph.js";
 import { audit } from "./audit.js";
 import { pkceChallenge, pkceVerifier, type OidcClient } from "./oidc.js";
 import { newId, SESSION_COOKIE, SessionManager } from "@miroclone/server-core";
@@ -17,6 +19,9 @@ export interface AppOptions {
   /** Set false only for local development over HTTP. */
   secureCookies?: boolean;
   exportPolicy?: ExportPolicy;
+  graph: GraphClient;
+  /** Key for encrypting Graph tokens in the session store (32 bytes). */
+  tokenKey: Buffer;
   txTtlSeconds?: number;
 }
 
@@ -51,8 +56,9 @@ export function buildApp(opts: AppOptions) {
       return reply.code(400).send({ error: "invalid_state" });
 
     let claims: EntraClaims;
+    let tokens: Awaited<ReturnType<OidcClient["exchange"]>>["tokens"];
     try {
-      claims = await opts.oidc.exchange({ code, codeVerifier: tx.codeVerifier, nonce: tx.nonce });
+      ({ claims, tokens } = await opts.oidc.exchange({ code, codeVerifier: tx.codeVerifier, nonce: tx.nonce }));
     } catch (err) {
       req.log.warn({ err }, "token exchange failed");
       audit({ action: "sign_in", actor: "unknown", detail: { allowed: false, reason: "token" } });
@@ -63,6 +69,15 @@ export function buildApp(opts: AppOptions) {
     if (!result.ok) {
       audit({ action: "sign_in", actor: claims.oid ?? "unknown", detail: { allowed: false, reason: result.reason } });
       return reply.code(403).send({ error: result.reason });
+    }
+    // A user in more than 200 groups gets no group list in the token. Resolve it through Graph (IAM-9).
+    let groups = claims.groups ?? [];
+    if (claims._claim_names?.groups) {
+      try { groups = await opts.graph.memberGroups(tokens.accessToken); }
+      catch (err) {
+        req.log.error({ err }, "group overage lookup failed");
+        return reply.code(503).send({ error: "groups_unavailable" });
+      }
     }
     await upsertUser(opts.db, {
       id: claims.oid,
@@ -75,7 +90,8 @@ export function buildApp(opts: AppOptions) {
       name: claims.name ?? claims.preferred_username ?? claims.oid,
       email: claims.email ?? claims.preferred_username,
       isAdmin: result.isAdmin,
-      groups: claims.groups ?? [],
+      groups,
+      graph: sealTokens(tokens, opts.tokenKey),
     });
     audit({ action: "sign_in", actor: claims.oid, detail: { allowed: true } });
     reply.setCookie(SESSION_COOKIE, session.id, cookieOpts);

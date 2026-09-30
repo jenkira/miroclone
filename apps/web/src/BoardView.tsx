@@ -6,6 +6,7 @@ import { api, type BoardSummary, type Me } from "./api.js";
 import { Banner } from "./Banner.js";
 import { Canvas, colourFor } from "./Canvas.js";
 import { ExportMenu } from "./ExportMenu.js";
+import { ShareDialog } from "./ShareDialog.js";
 import { Toolbar } from "./Toolbar.js";
 import type { Tool } from "./tools.js";
 
@@ -17,6 +18,7 @@ export function BoardView({ id, me }: { id: string; me: Me }) {
   const [tool, setTool] = useState<Tool>("select");
   const [status, setStatus] = useState<Status>("connecting");
   const selectionRef = useRef<() => string[]>(() => []);
+  const [sharing, setSharing] = useState(false);
   const [people, setPeople] = useState<{ id: number; name: string; colour: string }[]>([]);
 
   useEffect(() => { api.board(id).then(setMeta).catch(() => setError("You can't open this board.")); }, [id]);
@@ -53,6 +55,7 @@ export function BoardView({ id, me }: { id: string; me: Me }) {
         <strong>{meta.title}</strong>
         <span aria-live="polite">{status === "connected" ? "Saved automatically" : status === "connecting" ? "Connecting…" : "Offline. Changes merge when you reconnect."}</span>
         {readOnly && <span>View only</span>}
+        {meta.role === "owner" && <button onClick={() => setSharing(true)}>Share</button>}
         <ExportMenu board={session.board} title={meta.title} classification={meta.classification} selection={() => selectionRef.current()}
           authorise={(format, scope) => api.recordExport(id, format, scope) as Promise<void>} />
         <span style={{ marginLeft: "auto", display: "flex", gap: 4 }} aria-label="People on this board">
@@ -62,6 +65,7 @@ export function BoardView({ id, me }: { id: string; me: Me }) {
       <Toolbar tool={tool} onChange={setTool} disabled={readOnly} />
       <Canvas selectionRef={selectionRef} board={session.board} tool={tool} readOnly={readOnly} awareness={session.provider.awareness ?? undefined} onToolDone={() => setTool("select")} />
       <Banner classification={meta.classification} />
+      {sharing && <ShareDialog boardId={id} onClose={() => setSharing(false)} />}
     </div>
   );
 }

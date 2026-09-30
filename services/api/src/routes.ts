@@ -1,7 +1,9 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import * as Y from "yjs";
 import { atLeast, boardRoles, defaultClassifications, importJson, OBJECTS_MAP, type BoardRole } from "@miroclone/shared";
-import { appendUpdate } from "@miroclone/server-core";
+import { appendUpdate, openTokens, sealTokens } from "@miroclone/server-core";
+import type { GraphClient } from "./graph.js";
+import type { OidcClient } from "./oidc.js";
 import { audit } from "./audit.js";
 import * as boards from "./boards.js";
 import type { Db } from "@miroclone/server-core";
@@ -23,7 +25,7 @@ export type ExportPolicy = Record<string, "everyone" | "owners" | "none">;
 
 export const exportFormats = ["png", "svg", "pdf", "json"] as const;
 
-export function boardRoutes(app: FastifyInstance, opts: { db: Db; sessions: SessionManager; exportPolicy?: ExportPolicy }) {
+export function boardRoutes(app: FastifyInstance, opts: { db: Db; sessions: SessionManager; exportPolicy?: ExportPolicy; graph: GraphClient; oidc: OidcClient; tokenKey: Buffer }) {
   const { db } = opts;
   const actorOf = (r: FastifyRequest): boards.Actor => ({ id: r.session!.userId, groups: r.session!.groups });
 
@@ -75,11 +77,30 @@ export function boardRoutes(app: FastifyInstance, opts: { db: Db; sessions: Sess
       return { ok: true };
     });
 
-    api.put<{ Params: { id: string }; Body: { type: "user" | "group"; principalId: string; role: BoardRole } }>(
+    /** Returns a live Graph access token for the session, refreshing it when it's about to expire. */
+    const graphToken = async (s: Session): Promise<string> => {
+      let t = s.graph ? openTokens(s.graph, opts.tokenKey) : undefined;
+      if (!t) throw new boards.Forbidden("Sign in again to search the directory.");
+      if (t.expiresAt - Math.floor(Date.now() / 1000) < 60) {
+        if (!t.refreshToken) throw new boards.Forbidden("Sign in again to search the directory.");
+        t = { ...(await opts.oidc.refresh(t.refreshToken)), refreshToken: t.refreshToken };
+        await opts.sessions.setGraph(s.id, sealTokens(t, opts.tokenKey));
+      }
+      return t.accessToken;
+    };
+
+    // People picker (IAM-5). The search runs as the signed-in user, so Graph applies their directory rights.
+    api.get<{ Querystring: { q?: string } }>("/api/people", async (req) =>
+      opts.graph.search(await graphToken(req.session!), req.query.q ?? ""));
+
+    api.get<{ Params: { id: string } }>("/api/boards/:id/members", async (req) =>
+      boards.listMembers(db, actorOf(req), req.params.id));
+
+    api.put<{ Params: { id: string }; Body: { type: "user" | "group"; principalId: string; role: BoardRole; name?: string } }>(
       "/api/boards/:id/members", async (req) => {
-        const { type, principalId, role } = req.body;
+        const { type, principalId, role, name } = req.body;
         if (!["user", "group"].includes(type) || !principalId || !boardRoles.includes(role)) throw new boards.Invalid("bad member");
-        await boards.share(db, actorOf(req), req.params.id, { type, id: principalId, role });
+        await boards.share(db, actorOf(req), req.params.id, { type, id: principalId, role, name });
         audit({ action: "share_change", actor: req.session!.userId, boardId: req.params.id, detail: { type, principalId, role } });
         return { ok: true };
       });

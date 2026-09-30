@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { exportJson, importJson } from "@miroclone/shared";
 import { loadDoc } from "@miroclone/server-core";
-import { db } from "./testutil.js";
+import { db, graphCalls } from "./testutil.js";
 import type { EntraClaims } from "@miroclone/shared";
 import { SESSION_COOKIE } from "./app.js";
 import { setup, signIn } from "./testutil.js";
@@ -9,8 +9,8 @@ import { setup, signIn } from "./testutil.js";
 const claims = (oid: string, groups: string[] = []): EntraClaims =>
   ({ oid, tid: "t1", name: oid, roles: ["Whiteboard.User"], amr: ["mfa"], groups });
 
-async function login(oid: string, groups?: string[], extra = {}) {
-  const s = setup(claims(oid, groups), { t: 1000 }, extra);
+async function login(oid: string, groups?: string[], extra = {}, ttl = 3600, raw?: Partial<EntraClaims>) {
+  const s = setup({ ...claims(oid, groups), ...raw }, { t: 1000 }, extra, ttl);
   const c = (await signIn(s.app)).cookies[0]!.value;
   return { ...s, cookies: { [SESSION_COOKIE]: c } };
 }
@@ -108,5 +108,50 @@ describe("export and import", () => {
     const a = await login("im-bad");
     const res = await a.app.inject({ method: "POST", url: "/api/boards/import", cookies: a.cookies, payload: { file: "{}" } });
     expect(res.statusCode).toBe(400);
+  });
+});
+
+describe("people picker and sharing", () => {
+  it("searches the directory as the signed-in user", async () => {
+    const a = await login("pp-ann");
+    graphCalls.length = 0;
+    const res = await a.app.inject({ url: "/api/people?q=eng", cookies: a.cookies });
+    expect(res.json()).toEqual([
+      { type: "user", id: "u-eng", name: "Eng Person", email: "eng@x.test" },
+      { type: "group", id: "g-eng", name: "Engineering" },
+    ]);
+    expect(graphCalls.every((c) => c.auth === "Bearer graph-at")).toBe(true);
+  });
+
+  it("refreshes an expiring Graph token and keeps the new one", async () => {
+    const a = await login("pp-exp", [], {}, 10);
+    graphCalls.length = 0;
+    await a.app.inject({ url: "/api/people?q=eng", cookies: a.cookies });
+    expect(graphCalls.every((c) => c.auth === "Bearer graph-at-2")).toBe(true);
+  });
+
+  it("requires a session", async () => {
+    const { app } = setup(claims("x"));
+    expect((await app.inject("/api/people?q=eng")).statusCode).toBe(401);
+  });
+
+  it("resolves group overage through Graph (IAM-9)", async () => {
+    const owner = await login("ov-own");
+    const big = await login("ov-big", [], {}, 3600, { _claim_names: { groups: "src1" } });
+    const id = (await owner.app.inject({ method: "POST", url: "/api/boards", cookies: owner.cookies, payload: { title: "P", classification: "OFFICIAL" } })).json().id;
+    await owner.app.inject({ method: "PUT", url: `/api/boards/${id}/members`, cookies: owner.cookies, payload: { type: "group", principalId: "g-big-2", role: "editor", name: "Big group" } });
+    expect((await big.app.inject({ url: `/api/boards/${id}`, cookies: big.cookies })).json().role).toBe("editor");
+  });
+
+  it("lists members with names, and hides the list from non-members", async () => {
+    const a = await login("ml-ann"), b = await login("ml-bob");
+    const id = (await a.app.inject({ method: "POST", url: "/api/boards", cookies: a.cookies, payload: { title: "P", classification: "OFFICIAL" } })).json().id;
+    await a.app.inject({ method: "PUT", url: `/api/boards/${id}/members`, cookies: a.cookies, payload: { type: "group", principalId: "g-eng", role: "viewer", name: "Engineering" } });
+    const list = (await a.app.inject({ url: `/api/boards/${id}/members`, cookies: a.cookies })).json();
+    expect(list).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "group", name: "Engineering", role: "viewer" }),
+      expect.objectContaining({ type: "user", id: "ml-ann", role: "owner" }),
+    ]));
+    expect((await b.app.inject({ url: `/api/boards/${id}/members`, cookies: b.cookies })).statusCode).toBe(404);
   });
 });
