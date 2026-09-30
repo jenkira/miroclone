@@ -3,7 +3,9 @@ import "pixi.js/unsafe-eval";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { api, type Me } from "./api.js";
+import { AdminPage } from "./AdminPage.js";
 import { BoardView } from "./BoardView.js";
+import { ClassificationsProvider } from "./classifications.js";
 import { Dashboard } from "./Dashboard.js";
 import { Local } from "./Local.js";
 import { clearOfflineCache } from "./offline.js";
@@ -25,7 +27,11 @@ function App() {
   if (me === undefined) return <p>Loading…</p>;
   if (me === null) return <main style={{ fontFamily: "system-ui" }}><h1>Miroclone</h1><p><a href="/auth/login">Sign in with Microsoft</a></p></main>;
   const board = /^#\/board\/([0-9a-f-]+)$/.exec(hash);
-  return board ? <BoardView id={board[1]!} me={me} /> : <Dashboard me={me} />;
+  return (
+    <ClassificationsProvider>
+      {hash === "#/admin" ? <AdminPage /> : board ? <BoardView id={board[1]!} me={me} /> : <Dashboard me={me} />}
+    </ClassificationsProvider>
+  );
 }
 
 createRoot(document.getElementById("root")!).render(<App />);

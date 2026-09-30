@@ -14,6 +14,14 @@ export interface VoteState {
   mine: string[]; remaining: number;
   results: { objectId: string; count: number; voters?: string[] }[] | null;
 }
+export interface Marking { key: string; label: string; level: number; colour: string }
+export interface ClassificationConfig { list: Marking[]; default: string }
+export interface UsageStats {
+  users: { total: number; activeLast7Days: number; activeLast30Days: number };
+  boards: { total: number; inRecycleBin: number; byClassification: { classification: string; count: number }[] };
+  storage: { documentBytes: number; versionBytes: number; fileBytes: number; fileCount: number };
+  activity: { comments: number; templates: number };
+}
 export interface BoardSummary { id: string; title: string; classification: string; role: string; starred: boolean; updated_at: string }
 
 async function call<T>(method: string, url: string, body?: unknown): Promise<T> {
@@ -71,6 +79,10 @@ export const api = {
   closeVoting: (id: string) => call<VoteState>("POST", `/api/boards/${id}/votes/close`),
   castVote: (id: string, objectId: string) => call<VoteState>("POST", `/api/boards/${id}/votes`, { objectId }),
   removeVote: (id: string, objectId: string) => call<VoteState>("DELETE", `/api/boards/${id}/votes`, { objectId }),
+  classifications: () => call<ClassificationConfig>("GET", "/api/classifications"),
+  saveClassifications: (cfg: ClassificationConfig) => call<ClassificationConfig>("PUT", "/api/admin/classifications", cfg),
+  stats: () => call<UsageStats>("GET", "/api/admin/stats"),
+  auditPaste: (toBoardId: string, fromBoardId: string, count: number) => call<unknown>("POST", `/api/boards/${toBoardId}/paste-audit`, { fromBoardId, count }),
   recordExport: (id: string, format: string, scope = "board") => call<unknown>("POST", `/api/boards/${id}/exports`, { format, scope }),
   importBoard: (file: string, classification?: string) => call<{ id: string }>("POST", "/api/boards/import", { file, classification }),
   logout: () => call<unknown>("POST", "/auth/logout"),

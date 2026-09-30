@@ -56,12 +56,21 @@ export interface CanvasProps {
   /** Called when the Vote tool clicks an object. `remove` is set when Alt is held. */
   onVote?: (objectId: string, remove: boolean) => void;
   canVote?: boolean;
+  /** This board's ID and classification. Copied content remembers them, so a paste can be checked (PMK-5). */
+  boardId?: string;
+  classification?: string;
+  /**
+   * Called before content from another board is pasted. Return false to cancel. A board with a lower classification
+   * needs a warning and an audit event first.
+   */
+  onPasteCheck?: (from: { boardId: string; classification: string }, count: number) => Promise<boolean>;
   /** Called when the view changes. `source` is "user" for the user's own pan and zoom. */
   onViewChange?: (v: Viewport, source: "user" | "api") => void;
 }
 
 /** Clipboard shared by every board in this tab, so paste works between boards (CNV-11). It clears on reload and sign-out (COL-10). */
-let clipboard: BoardObject[] = [];
+interface Clip { objects: BoardObject[]; boardId?: string; classification?: string }
+let clipboard: Clip = { objects: [] };
 /** Grows or shrinks a text object to fit its content. */
 export function fitTextHeight(board: Board, id: string) {
   const o = board.get(id);
@@ -71,7 +80,7 @@ export function fitTextHeight(board: Board, id: string) {
   }
 }
 
-export const clearClipboard = () => { clipboard = []; };
+export const clearClipboard = () => { clipboard = { objects: [] }; };
 
 const CURSOR_COLOURS = ["#e53935", "#8e24aa", "#3949ab", "#00897b", "#f4511e", "#6d4c41"];
 export const colourFor = (id: number) => CURSOR_COLOURS[id % CURSOR_COLOURS.length]!;
@@ -87,7 +96,7 @@ type Gesture =
 
 const resizable = (o: BoardObject) => o.type !== "connector" && o.type !== "stroke";
 
-export function Canvas({ board, tool, readOnly, awareness, onToolDone, apiRef, onSelect, onFiles, pins, selectedPin, onPinClick, onComment, canComment, badges, onVote, canVote, onViewChange }: CanvasProps) {
+export function Canvas({ board, tool, readOnly, awareness, onToolDone, apiRef, onSelect, onFiles, pins, selectedPin, onPinClick, onComment, canComment, badges, onVote, canVote, onViewChange, boardId, classification, onPasteCheck }: CanvasProps) {
   const host = useRef<HTMLDivElement>(null);
   const toolRef = useRef(tool);
   const roRef = useRef(readOnly);
@@ -99,6 +108,8 @@ export function Canvas({ board, tool, readOnly, awareness, onToolDone, apiRef, o
   const badgesRef = useRef<Badge[]>([]);
   const voteCb = useRef({ onVote, canVote, onViewChange });
   const drawBadgesRef = useRef<() => void>(() => {});
+  const idRef = useRef({ boardId, classification, onPasteCheck });
+  idRef.current = { boardId, classification, onPasteCheck };
   const selection = useRef<string[]>([]);
   const view = useRef<Viewport>({ x: 0, y: 0, zoom: 1 });
   const redrawRef = useRef<() => void>(() => {});
@@ -383,9 +394,16 @@ export function Canvas({ board, tool, readOnly, awareness, onToolDone, apiRef, o
       else if (e.shiftKey && e.key === "@") { e.preventDefault(); apiRef?.current?.fitSelection(); }          // Shift+2
       else if (mod && k === "z" && !ro) { e.preventDefault(); e.shiftKey ? board.undo.redo() : board.undo.undo(); }
       else if (mod && k === "y" && !ro) { e.preventDefault(); board.undo.redo(); }
-      else if (mod && k === "c") { clipboard = board.copy(sel); }
-      else if (mod && k === "x" && !ro) { clipboard = board.copy(sel); board.remove(sel); setSel([]); }
-      else if (mod && k === "v" && !ro) { setSel(board.paste(clipboard)); }
+      else if (mod && k === "c") { clipboard = { objects: board.copy(sel), boardId: idRef.current.boardId, classification: idRef.current.classification }; }
+      else if (mod && k === "x" && !ro) { clipboard = { objects: board.copy(sel), boardId: idRef.current.boardId, classification: idRef.current.classification }; board.remove(sel); setSel([]); }
+      else if (mod && k === "v" && !ro) {
+        const clip = clipboard;
+        const { boardId: here, onPasteCheck: check } = idRef.current;
+        // Content from another board is checked first, because it might carry a higher classification.
+        if (check && clip.boardId && clip.classification && clip.boardId !== here) {
+          void check({ boardId: clip.boardId, classification: clip.classification }, clip.objects.length).then((ok) => { if (ok) setSel(board.paste(clip.objects)); });
+        } else setSel(board.paste(clip.objects));
+      }
       else if (mod && k === "d" && !ro) { e.preventDefault(); setSel(board.paste(board.copy(sel))); }
       else if (mod && k === "g" && !ro) { e.preventDefault(); e.shiftKey ? sel.forEach((id) => { const g = board.get(id)?.groupId; if (g) board.ungroup(g); }) : board.group(sel); }
       else if (mod && k === "l" && !ro) { e.preventDefault(); const locked = !sel.every((id) => board.get(id)?.locked); board.setLocked(sel, locked); redraw(); }

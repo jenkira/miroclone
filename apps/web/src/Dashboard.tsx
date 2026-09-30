@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
-import { defaultClassifications } from "@miroclone/shared";
 import { api, type BoardSummary, type Me, type OrgTemplate, type SearchHit, type TemplateInfo } from "./api.js";
 import { snippetParts } from "./versions.js";
 import { Banner } from "./Banner.js";
+import { useClassifications } from "./classifications.js";
 import { Notifications } from "./Notifications.js";
 import { clearOfflineCache } from "./offline.js";
 
@@ -12,7 +12,11 @@ export function Dashboard({ me }: { me: Me }) {
   const [filter, setFilter] = useState<(typeof filters)[number][0]>("recent");
   const [boards, setBoards] = useState<BoardSummary[]>([]);
   const [title, setTitle] = useState("");
-  const [classification, setClassification] = useState("OFFICIAL");
+  const cfg = useClassifications();
+  const [chosen, setChosen] = useState<string | null>(null);
+  // The administrator's default applies until the person picks something else.
+  const classification = chosen ?? cfg.default;
+  const setClassification = setChosen;
   const [templates, setTemplates] = useState<{ builtin: TemplateInfo[]; organisation: OrgTemplate[] }>({ builtin: [], organisation: [] });
   const [template, setTemplate] = useState("");
   const [createError, setCreateError] = useState("");
@@ -32,7 +36,7 @@ export function Dashboard({ me }: { me: Me }) {
     <main style={{ fontFamily: "system-ui", maxWidth: 900, margin: "0 auto" }}>
       <Banner classification={classification} />
       <h1>Boards</h1>
-      <p>Signed in as {me.name}. <Notifications /> <button onClick={async () => { await clearOfflineCache(); await api.logout(); location.reload(); }}>Sign out</button></p>
+      <p>Signed in as {me.name}. <Notifications />{me.isAdmin && <> <a href="#/admin">Administration</a></>} <button onClick={async () => { await clearOfflineCache(); await api.logout(); location.reload(); }}>Sign out</button></p>
       <form onSubmit={async (e) => {
         e.preventDefault(); setCreateError("");
         try { const { id } = await api.createBoard(title, classification, template); location.hash = `#/board/${id}`; }
@@ -41,7 +45,7 @@ export function Dashboard({ me }: { me: Me }) {
         <label>Title <input value={title} onChange={(e) => setTitle(e.target.value)} required /></label>{" "}
         <label>Classification{" "}
           <select value={classification} onChange={(e) => setClassification(e.target.value)}>
-            {defaultClassifications.map((c) => <option key={c.key} value={c.key}>{c.label}</option>)}
+            {cfg.list.map((c) => <option key={c.key} value={c.key}>{c.label}</option>)}
           </select>
         </label>{" "}
         <label>Start from{" "}

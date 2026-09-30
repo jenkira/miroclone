@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import * as Y from "yjs";
-import { atLeast, boardRoles, builtinTemplates, defaultClassifications, importJson, OBJECTS_MAP, type BoardRole } from "@miroclone/shared";
+import { atLeast, boardRoles, builtinTemplates, compareClassification, importJson, isDowngrade, OBJECTS_MAP, type BoardRole } from "@miroclone/shared";
 import { appendUpdate, deleteVersion, listVersions, openTokens, sealTokens, searchBoards, snapshot, versionState } from "@miroclone/server-core";
 import { createHash, randomUUID } from "node:crypto";
 import type { GraphClient } from "./graph.js";
@@ -12,6 +12,7 @@ import { audit } from "./audit.js";
 import * as boards from "./boards.js";
 import * as comments from "./comments.js";
 import * as workshop from "./workshop.js";
+import { loadClassifications, saveClassifications, usageStats, type ClassificationConfig } from "./settings.js";
 import type { Db } from "@miroclone/server-core";
 import { SESSION_COOKIE, type Session, type SessionManager } from "@miroclone/server-core";
 
@@ -50,8 +51,41 @@ export function boardRoutes(app: FastifyInstance, opts: { db: Db; sessions: Sess
       reply.code(code).send({ error: code === 500 ? "internal" : code === 413 ? "file_too_large" : err.message || err.constructor.name });
     });
 
-    const isClassification = (k: unknown): k is string =>
-      typeof k === "string" && defaultClassifications.some((c) => c.key === k);
+    // The markings an administrator configured (PMK-1). The list is cached for a few seconds, and a save clears it.
+    let cached: { at: number; cfg: ClassificationConfig } | undefined;
+    const config = async (): Promise<ClassificationConfig> => {
+      if (!cached || Date.now() - cached.at > 5000) cached = { at: Date.now(), cfg: await loadClassifications(db) };
+      return cached.cfg;
+    };
+    const isClassification = async (k: unknown): Promise<boolean> => typeof k === "string" && (await config()).list.some((c) => c.key === k);
+    const adminOnly = (req: FastifyRequest) => { if (!req.session!.isAdmin) throw new boards.Forbidden("Only a service administrator can do this."); };
+
+    api.get("/api/classifications", async () => config());
+
+    api.put<{ Body: unknown }>("/api/admin/classifications", async (req) => {
+      adminOnly(req);
+      const saved = await saveClassifications(db, req.session!.userId, req.body);
+      cached = undefined;
+      audit({ action: "settings_change", actor: req.session!.userId, detail: { setting: "classifications", markings: saved.list.map((c) => `${c.key}:${c.level}`), default: saved.default } });
+      return saved;
+    });
+
+    api.get("/api/admin/stats", async (req) => { adminOnly(req); return usageStats(db); });
+
+    // Pasting content into a board with a lower classification needs a warning, and leaves an audit event (PMK-5).
+    api.post<{ Params: { id: string }; Body: { fromBoardId: string; count?: number } }>("/api/boards/:id/paste-audit", async (req, reply) => {
+      const from = req.body?.fromBoardId;
+      if (typeof from !== "string" || !UUID.test(from)) throw new boards.Invalid("A source board is needed.");
+      const [toRole, fromRole] = [await boards.roleOnBoard(db, actorOf(req), req.params.id), await boards.roleOnBoard(db, actorOf(req), from)];
+      if (!toRole || !fromRole) throw new boards.NotFound();
+      if (!atLeast(toRole, "editor")) throw new boards.Forbidden();
+      const cls = async (id: string) => (await db.query<{ classification: string }>("SELECT classification FROM boards WHERE id = $1", [id])).rows[0]!.classification;
+      const [target, source, list] = [await cls(req.params.id), await cls(from), (await config()).list];
+      if (!isDowngrade(source, target, list)) throw new boards.Invalid("That paste doesn't lower the classification.");
+      audit({ action: "paste_downgrade", actor: req.session!.userId, boardId: req.params.id, detail: { fromBoardId: from, from: source, to: target, objects: Number(req.body.count) || 0 } });
+      return reply.code(204).send();
+    });
+
 
     // --- Files (CNV-8) ---
     // Uploads arrive as raw bytes. Every type is parsed as a buffer, and the route decides what it accepts.
@@ -121,13 +155,15 @@ export function boardRoutes(app: FastifyInstance, opts: { db: Db; sessions: Sess
     api.get<{ Querystring: { filter?: boards.BoardFilter } }>("/api/boards", async (req) =>
       boards.listBoards(db, actorOf(req), req.query.filter));
 
-    api.post<{ Body: { title: string; classification: string; template?: string } }>("/api/boards", async (req, reply) => {
-      if (!isClassification(req.body.classification)) throw new boards.Invalid("unknown classification");
+    api.post<{ Body: { title: string; classification?: string; template?: string } }>("/api/boards", async (req, reply) => {
+      const cfg = await config();
+      const requested = req.body.classification ?? cfg.default;
+      if (!(await isClassification(requested))) throw new boards.Invalid("unknown classification");
       // Check the template first, so a board isn't created and then left empty.
-      const start = req.body.template ? await workshop.templateObjects(db, req.body.template, req.body.classification) : undefined;
-      const id = await boards.createBoard(db, actorOf(req), req.body.title, req.body.classification);
+      const start = req.body.template ? await workshop.templateObjects(db, req.body.template, requested, cfg.list) : undefined;
+      const id = await boards.createBoard(db, actorOf(req), req.body.title, requested);
       if (start) await workshop.seedBoard(db, id, start);
-      audit({ action: "board_create", actor: req.session!.userId, boardId: id, detail: { classification: req.body.classification, template: req.body.template } });
+      audit({ action: "board_create", actor: req.session!.userId, boardId: id, detail: { classification: requested, template: req.body.template } });
       return reply.code(201).send({ id });
     });
 
@@ -194,8 +230,8 @@ export function boardRoutes(app: FastifyInstance, opts: { db: Db; sessions: Sess
 
     api.put<{ Params: { id: string }; Body: { classification: string; confirmed?: boolean; reason?: string } }>(
       "/api/boards/:id/classification", async (req) => {
-        if (!isClassification(req.body.classification)) throw new boards.Invalid("unknown classification");
-        const change = await boards.setClassification(db, actorOf(req), req.params.id, req.body.classification, req.body);
+        if (!(await isClassification(req.body.classification))) throw new boards.Invalid("unknown classification");
+        const change = await boards.setClassification(db, actorOf(req), req.params.id, req.body.classification, req.body, (await config()).list);
         audit({ action: "classification_change", actor: req.session!.userId, boardId: req.params.id, detail: { ...change, reason: req.body.reason } });
         return change;
       });
@@ -331,9 +367,9 @@ export function boardRoutes(app: FastifyInstance, opts: { db: Db; sessions: Sess
     // Creates a new board from a board file (EXP-3). The importer becomes the owner.
     api.post<{ Body: { file: string; classification?: string } }>("/api/boards/import", { bodyLimit: 64 * 1024 * 1024 }, async (req, reply) => {
       let file;
-      try { file = importJson(req.body.file); } catch (e) { throw new boards.Invalid((e as Error).message); }
+      try { file = importJson(req.body.file, (await config()).list); } catch (e) { throw new boards.Invalid((e as Error).message); }
       const classification = req.body.classification ?? file.classification;
-      if (!isClassification(classification)) throw new boards.Invalid("unknown classification");
+      if (!(await isClassification(classification))) throw new boards.Invalid("unknown classification");
       const id = await boards.createBoard(db, actorOf(req), file.title, classification);
       const doc = new Y.Doc();
       doc.transact(() => { for (const o of file.objects) doc.getMap(OBJECTS_MAP).set(o.id, o); });

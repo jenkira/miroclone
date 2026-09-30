@@ -1,6 +1,6 @@
 import {
   atLeast,
-  validateClassificationChange,
+  validateClassificationChange, type Classification,
   type BoardRole,
 } from "@miroclone/shared";
 import { RECYCLE_DAYS, roleOnBoard, type Actor, type Db } from "@miroclone/server-core";
@@ -150,11 +150,12 @@ export async function unshare(db: Db, actor: Actor, id: string, p: { type: "user
 export async function setClassification(
   db: Db, actor: Actor, id: string, to: string,
   opts: { confirmed?: boolean; reason?: string },
+  list?: readonly Classification[],
 ): Promise<{ from: string; to: string }> {
   await require(db, actor, id, "owner");
   const { rows } = await db.query<{ classification: string }>("SELECT classification FROM boards WHERE id = $1", [id]);
   const from = rows[0]!.classification;
-  const check = validateClassificationChange(from, to, opts);
+  const check = validateClassificationChange(from, to, opts, list);
   if (!check.ok) throw new Invalid(check.error);
   await db.query("UPDATE boards SET classification = $2, updated_at = now() WHERE id = $1", [id, to]);
   return { from, to };

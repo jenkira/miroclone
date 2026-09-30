@@ -145,6 +145,9 @@ importers:
       yjs:
         specifier: ^13.6.33
         version: 13.6.33
+      zod:
+        specifier: ^3.25.76
+        version: 3.25.76
     devDependencies:
       '@electric-sql/pglite':
         specifier: ^0.5.8

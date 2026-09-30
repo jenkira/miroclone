@@ -7,6 +7,8 @@ export type AuditAction =
   | "export"
   | "import"
   | "upload"
+  | "settings_change"
+  | "paste_downgrade"
   | "template_create"
   | "vote_start"
   | "vote_close"

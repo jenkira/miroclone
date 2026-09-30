@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import * as Y from "yjs";
 import {
   atLeast, boardObjectSchema, buildTemplate, cloneWithNewIds, compareClassification, isBuiltinTemplate, MAX_OBJECTS_PER_BOARD, OBJECTS_MAP,
-  type BoardObject, type BoardRole,
+  type BoardObject, type BoardRole, type Classification,
 } from "@miroclone/shared";
 import { appendUpdate, loadDoc, roleOnBoard, type Actor, type Db } from "@miroclone/server-core";
 import { Forbidden, Invalid, NotFound } from "./boards.js";
@@ -70,12 +70,12 @@ export async function deleteOrgTemplate(db: Db, actor: Actor & { isAdmin?: boole
  * Finds the starting content for a new board. A template's classification is a floor: a board made from a
  * PROTECTED template can't start lower, so content can't drop a level by being copied (PMK-5).
  */
-export async function templateObjects(db: Db, templateId: string, classification: string): Promise<BoardObject[]> {
+export async function templateObjects(db: Db, templateId: string, classification: string, list?: readonly Classification[]): Promise<BoardObject[]> {
   if (isBuiltinTemplate(templateId)) return buildTemplate(templateId);
   if (!/^[0-9a-f-]{36}$/i.test(templateId)) throw new NotFound();
   const r = (await db.query<{ objects: unknown; classification: string }>("SELECT objects, classification FROM org_templates WHERE id = $1", [templateId])).rows[0];
   if (!r) throw new NotFound();
-  if (compareClassification(classification, r.classification) < 0)
+  if (compareClassification(classification, r.classification, list) < 0)
     throw new Invalid(`This template holds ${r.classification} content, so the board must be ${r.classification} or higher.`);
   return cloneWithNewIds((r.objects as unknown[]).map((o) => boardObjectSchema.parse(o)));
 }

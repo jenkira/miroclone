@@ -75,3 +75,13 @@ classification floor on templates, the shared timer with a browser whose clock i
 presenting frames in reading order, following a person, bringing everyone to a view, and anonymous and
 named voting, including that an anonymous round never sends voter names. Organisation templates and
 boards persist, so each run uses its own names.
+
+## Administration test
+
+The script `admin.mjs` needs the full-stack setup, with the fake identity provider's administrator
+(`ada`). It checks that only an administrator reaches the admin page and its two endpoints, that the
+statistics show counts and no board titles, that a changed marking and default reach other people's
+pickers and banners, that a marking in use can't be removed, that markings at one level count as
+equivalent, and the paste warning and its audit event. It resets the markings before and after, so
+use a test database. Restart the API after restarting the fake identity provider, because the API
+caches the provider's signing key.

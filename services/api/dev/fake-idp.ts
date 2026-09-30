@@ -20,6 +20,7 @@ const users: Record<string, User> = {
   bob: { oid: "oid-bob", name: "Bob Builder", email: "bob@example.test", roles: ["Whiteboard.User"], amr: ["pwd", "mfa"], groups: ["g-eng"] },
   cy: { oid: "oid-cy", name: "Cy Nomfa", email: "cy@example.test", roles: ["Whiteboard.User"], amr: ["pwd"], groups: [] },
   dee: { oid: "oid-dee", name: "Dee Norole", email: "dee@example.test", roles: [], amr: ["pwd", "mfa"], groups: [] },
+  ada: { oid: "oid-ada", name: "Ada Admin", email: "ada@example.test", roles: ["Whiteboard.Admin"], amr: ["pwd", "mfa"], groups: ["g-eng"] },
   eve: { oid: "oid-eve", name: "Eve Overage", email: "eve@example.test", roles: ["Whiteboard.User"], amr: ["pwd", "mfa"], groups: [], overage: true },
 };
 const groups = [{ id: "g-eng", displayName: "Engineering" }, { id: "g-ops", displayName: "Operations" }];

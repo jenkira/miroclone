@@ -12,6 +12,8 @@ import { HistoryPanel } from "./HistoryPanel.js";
 import { Notifications } from "./Notifications.js";
 import { pinsFor } from "./pins.js";
 import { cacheBoard, clearOfflineCache } from "./offline.js";
+import { isDowngrade } from "@miroclone/shared";
+import { useClassifications } from "./classifications.js";
 import { ACCEPTED, MAX_BYTES, sizeFor, uploadMessage, useBoardImages } from "./images.js";
 import { ShareDialog } from "./ShareDialog.js";
 import { contentOfSelection } from "./selection.js";
@@ -87,6 +89,7 @@ export function BoardView({ id, me }: { id: string; me: Me }) {
   const facilitator = meta?.role === "owner" || meta?.role === "editor";
   const w = useWorkshop({ doc: session.doc, board: session.board, awareness: session.provider.awareness ?? undefined, me, canFacilitate: !!facilitator, apiRef });
   const voting = useVoting(id);
+  const { list: markings } = useClassifications();
   useEffect(() => { if (import.meta.env.DEV) Object.assign(window, { __apiRef: apiRef }); }, []);
 
   if (error) return <p role="alert">{error}</p>;
@@ -94,6 +97,16 @@ export function BoardView({ id, me }: { id: string; me: Me }) {
   const readOnly = meta.role === "viewer" || meta.role === "commenter";
   const canComment = meta.role !== "viewer";
   const canModerate = meta.role === "owner" || meta.role === "editor";
+
+  /** Warns before content moves into a board with a lower classification, and records it in the audit log (PMK-5). */
+  const checkPaste = async (from: { boardId: string; classification: string }, count: number) => {
+    let down = false;
+    try { down = isDowngrade(from.classification, meta.classification, markings); } catch { down = false; }
+    if (!down) return true;
+    if (!window.confirm(`This content comes from a ${from.classification} board, and this board is ${meta.classification}. Pasting it lowers the classification of that information. Do you want to paste it? This is recorded in the audit log.`)) return false;
+    try { await api.auditPaste(id, from.boardId, count); return true; }
+    catch { setNotice("The paste wasn't recorded in the audit log, so it was cancelled."); return false; }
+  };
 
   /** Saves the selection, or the whole board, as a template for the organisation (WSH-2). */
   const saveTemplate = async () => {
@@ -172,7 +185,7 @@ export function BoardView({ id, me }: { id: string; me: Me }) {
       <WorkshopBar w={w} />
       <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
         <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
-          <Canvas apiRef={apiRef} onSelect={setSelected} onFiles={addImages} board={session.board} tool={tool} readOnly={readOnly} awareness={session.provider.awareness ?? undefined}
+          <Canvas boardId={id} classification={meta.classification} onPasteCheck={checkPaste} apiRef={apiRef} onSelect={setSelected} onFiles={addImages} board={session.board} tool={tool} readOnly={readOnly} awareness={session.provider.awareness ?? undefined}
             onToolDone={() => setTool("select")}
             pins={pins} selectedPin={selectedThread} canComment={canComment}
             badges={voting.badges} canVote={canComment && voting.open} onVote={(oid, remove) => void voting.cast(oid, remove)} onViewChange={w.onViewChange}
