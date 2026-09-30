@@ -12,12 +12,13 @@ function required(name: string): string {
 
 const db = new pg.Pool({
   host: required("POSTGRES_HOST"),
+  port: process.env.POSTGRES_PORT ? Number(process.env.POSTGRES_PORT) : undefined,
   database: required("POSTGRES_DB"),
   user: required("POSTGRES_USER"),
   password: required("POSTGRES_PASSWORD"),
   ssl: process.env.POSTGRES_SSL === "0" ? false : { rejectUnauthorized: true },
 });
-const redis = new Redis({ host: required("REDIS_HOST"), password: process.env.REDIS_PASSWORD });
+const redis = new Redis({ host: required("REDIS_HOST"), port: process.env.REDIS_PORT ? Number(process.env.REDIS_PORT) : 6379, password: process.env.REDIS_PASSWORD });
 const sessions = new SessionManager(new RedisSessionStore(redis, defaultSessionPolicy.maxLifetimeSeconds));
 
 const port = Number(process.env.PORT ?? 1234);

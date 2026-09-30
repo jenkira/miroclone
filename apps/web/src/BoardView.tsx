@@ -30,7 +30,10 @@ export function BoardView({ id, me }: { id: string; me: Me }) {
     // The session cookie is the credential. The provider needs some token, or the server never starts authentication.
     const provider = new HocuspocusProvider({ name: id, document: doc, websocketProvider: socket, token: "cookie" });
     provider.awareness?.setLocalStateField("user", { name: me.name, colour: colourFor(doc.clientID) });
-    return { doc, provider, socket, board: new Board(doc, doc.clientID) };
+    const board = new Board(doc, doc.clientID);
+    // End-to-end tests read the board through this hook. It exists only in the development server.
+    if (import.meta.env.DEV) (window as unknown as { __board: Board }).__board = board;
+    return { doc, provider, socket, board };
   }, [id, me.name]);
 
   useEffect(() => {

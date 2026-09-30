@@ -18,10 +18,13 @@ const oidc = new EntraOidcClient({
   clientId: required("ENTRA_CLIENT_ID"),
   clientSecret: required("ENTRA_CLIENT_SECRET"),
   redirectUri: required("ENTRA_REDIRECT_URI"),
+  // Optional. Sovereign clouds use another authority, and local development uses a fake identity provider.
+  authority: process.env.ENTRA_AUTHORITY,
 });
 
 const db = new pg.Pool({
   host: required("POSTGRES_HOST"),
+  port: process.env.POSTGRES_PORT ? Number(process.env.POSTGRES_PORT) : undefined,
   database: required("POSTGRES_DB"),
   user: required("POSTGRES_USER"),
   password: required("POSTGRES_PASSWORD"),
@@ -29,12 +32,12 @@ const db = new pg.Pool({
 });
 await migrate(db);
 
-const redis = new Redis({ host: required("REDIS_HOST"), password: process.env.REDIS_PASSWORD });
+const redis = new Redis({ host: required("REDIS_HOST"), port: process.env.REDIS_PORT ? Number(process.env.REDIS_PORT) : 6379, password: process.env.REDIS_PASSWORD });
 const app = buildApp({
   tenantId,
   oidc,
   db,
-  graph: new GraphClient(),
+  graph: new GraphClient(fetch, process.env.GRAPH_BASE_URL),
   tokenKey: parseKey(required("SESSION_ENCRYPTION_KEY")),
   sessions: new SessionManager(new RedisSessionStore(redis, defaultSessionPolicy.maxLifetimeSeconds)),
   secureCookies: process.env.INSECURE_COOKIES !== "1",
