@@ -6,6 +6,8 @@ export interface EntraClaims {
   preferred_username?: string;
   roles?: string[];
   amr?: string[];
+  /** Group object IDs. Group overage is handled through Microsoft Graph (IAM-9). */
+  groups?: string[];
   exp?: number;
 }
 

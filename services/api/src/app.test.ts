@@ -1,27 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { EntraClaims } from "@miroclone/shared";
-import { buildApp, SESSION_COOKIE } from "./app.js";
-import { pkceChallenge, type OidcClient } from "./oidc.js";
-import { MemorySessionStore, SessionManager } from "./session.js";
+import { SESSION_COOKIE } from "./app.js";
+import { pkceChallenge } from "./oidc.js";
+import { setup, signIn } from "./testutil.js";
 
 const good: EntraClaims = { oid: "u1", tid: "t1", name: "Una", roles: ["Whiteboard.User"], amr: ["pwd", "mfa"] };
-
-function setup(claims: EntraClaims | Error, now = { t: 1000 }) {
-  let challenge = "";
-  const oidc: OidcClient = {
-    authorizationUrl: (p) => { challenge = p.codeChallenge; return `https://idp.test/auth?state=${p.state}`; },
-    exchange: async () => { if (claims instanceof Error) throw claims; return claims; },
-  };
-  const sessions = new SessionManager(new MemorySessionStore(), { idleSeconds: 60, maxLifetimeSeconds: 600 }, () => now.t);
-  const app = buildApp({ tenantId: "t1", oidc, sessions, secureCookies: true });
-  return { app, now, getChallenge: () => challenge };
-}
-
-async function signIn(app: ReturnType<typeof buildApp>) {
-  const login = await app.inject("/auth/login");
-  const state = new URL(login.headers.location as string).searchParams.get("state")!;
-  return app.inject(`/auth/callback?code=c&state=${state}`);
-}
 
 describe("sign-in", () => {
   it("redirects to Entra with an S256 PKCE challenge", async () => {

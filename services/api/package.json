@@ -13,9 +13,12 @@
     "@fastify/cookie": "^11.1.2",
     "@miroclone/shared": "workspace:*",
     "fastify": "^5.0.0",
-    "jose": "^6.2.12"
+    "jose": "^6.2.12",
+    "pg": "^8.23.1"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.5.8",
+    "@types/pg": "^8.23.1",
     "tsx": "^4.19.0"
   }
 }

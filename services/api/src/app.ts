@@ -3,14 +3,17 @@ import cookie from "@fastify/cookie";
 import { validateClaims, type EntraClaims } from "@miroclone/shared";
 import { audit } from "./audit.js";
 import { pkceChallenge, pkceVerifier, type OidcClient } from "./oidc.js";
-import { newId, SessionManager } from "./session.js";
-
-export const SESSION_COOKIE = "mc_session";
+import { newId, SESSION_COOKIE, SessionManager } from "./session.js";
+export { SESSION_COOKIE };
+import { upsertUser } from "./boards.js";
+import type { Db } from "./db.js";
+import { boardRoutes } from "./routes.js";
 
 export interface AppOptions {
   tenantId: string;
   oidc: OidcClient;
   sessions: SessionManager;
+  db: Db;
   /** Set false only for local development over HTTP. */
   secureCookies?: boolean;
   txTtlSeconds?: number;
@@ -60,11 +63,18 @@ export function buildApp(opts: AppOptions) {
       audit({ action: "sign_in", actor: claims.oid ?? "unknown", detail: { allowed: false, reason: result.reason } });
       return reply.code(403).send({ error: result.reason });
     }
+    await upsertUser(opts.db, {
+      id: claims.oid,
+      tenantId: claims.tid,
+      name: claims.name ?? claims.preferred_username ?? claims.oid,
+      email: claims.email ?? claims.preferred_username,
+    });
     const session = await opts.sessions.create({
       userId: claims.oid,
       name: claims.name ?? claims.preferred_username ?? claims.oid,
       email: claims.email ?? claims.preferred_username,
       isAdmin: result.isAdmin,
+      groups: claims.groups ?? [],
     });
     audit({ action: "sign_in", actor: claims.oid, detail: { allowed: true } });
     reply.setCookie(SESSION_COOKIE, session.id, cookieOpts);
@@ -84,5 +94,6 @@ export function buildApp(opts: AppOptions) {
     return { id: s.userId, name: s.name, email: s.email, isAdmin: s.isAdmin };
   });
 
+  boardRoutes(app, opts);
   return app;
 }

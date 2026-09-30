@@ -1,11 +1,14 @@
 import { randomBytes } from "node:crypto";
 
+export const SESSION_COOKIE = "mc_session";
+
 export interface Session {
   id: string;
   userId: string;
   name: string;
   email?: string;
   isAdmin: boolean;
+  groups: string[];
   createdAt: number;
   lastSeenAt: number;
 }
@@ -60,7 +63,7 @@ export class SessionManager {
     private now: () => number = () => Math.floor(Date.now() / 1000),
   ) {}
 
-  async create(user: Pick<Session, "userId" | "name" | "email" | "isAdmin">): Promise<Session> {
+  async create(user: Pick<Session, "userId" | "name" | "email" | "isAdmin" | "groups">): Promise<Session> {
     const t = this.now();
     const s: Session = { ...user, id: newId(), createdAt: t, lastSeenAt: t };
     await this.store.put(s);
