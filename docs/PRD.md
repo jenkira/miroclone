@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Status | Draft for review |
-| Version | 0.4 |
+| Version | 0.6 |
 | Date | 30 September 2026 |
 | Owner | To be confirmed |
 | Working name | Miroclone |
@@ -36,6 +36,8 @@ Table 1. Change history
 | 0.2 | 30 September 2026 | Set the hosting platform to on-premises RKE2, set the highest classification to PROTECTED, and added Miro migration requirements. |
 | 0.3 | 30 September 2026 | Recorded answers to Q8 to Q11: both marking frameworks, all Entra users cleared, offline caching allowed, and MinIO for object storage. Set Passwordstate as the secrets repository. |
 | 0.4 | 30 September 2026 | Made object storage configurable for any S3-compatible store, allowed cleared guest users, and switched secrets to the platform team's existing Passwordstate operator. |
+| 0.5 | 30 September 2026 | Named External Secrets Operator (ESO) as the Passwordstate sync operator and defined how the Helm chart requests secrets. |
+| 0.6 | 30 September 2026 | Added section 8.5.1 on connecting ESO to Passwordstate through the ESO webhook provider, and narrowed Q16. |
 
 ## 2. Background and research
 
@@ -489,15 +491,125 @@ characteristics:
 - Includes liveness, readiness, and startup probes on every service.
 - Includes NetworkPolicies that allow only the required traffic between
   components, and egress only to Entra ID and Microsoft Graph.
-- Takes secrets from Passwordstate through the operator that the platform
-  team already runs to sync Passwordstate secrets into Kubernetes. The chart
-  reads standard Kubernetes Secrets, so it doesn't depend on the operator's
-  details, and never stores secrets in values files. If that operator can't
-  be used, the fallback is the External Secrets Operator webhook provider
-  with a read-only Passwordstate API key, scoped to one password list and
-  restricted to the cluster's IP addresses. See open question Q15.
+- Takes secrets from Passwordstate through External Secrets Operator (ESO),
+  which the platform team already runs. Section 8.5 describes how the chart
+  requests secrets.
 
-### 8.5 Observability
+### 8.5 Secrets
+
+The Helm chart requests each secret through an ESO `ExternalSecret`
+resource. ESO reads the value from Passwordstate and writes a standard
+Kubernetes Secret, which the services mount. The services read only the
+Kubernetes Secret, so they don't depend on ESO or Passwordstate.
+
+The chart meets the following secrets requirements:
+
+- Creates one `ExternalSecret` for each service. Each one requests only the
+  secrets that service needs.
+- References the platform team's existing `ClusterSecretStore` or
+  `SecretStore`. The Helm values set its name and kind. The chart doesn't
+  create a store or hold Passwordstate credentials.
+- Lets administrators map each secret to its Passwordstate entry in the Helm
+  values, such as a password list and title, or a password ID.
+- Sets a refresh interval, so ESO picks up rotated secrets. The services
+  reload rotated database and object storage credentials without a restart,
+  or the chart restarts them automatically.
+- Includes an option to turn off the `ExternalSecret` resources, so
+  administrators can supply the Kubernetes Secrets another way, such as in a
+  test cluster.
+- Never stores secret values in Helm values, source control, or container
+  images.
+
+The product needs the following secrets:
+
+- The Entra ID client secret or certificate for the API service.
+- The session signing key for the API and collaboration services.
+- PostgreSQL credentials for the API, collaboration, and worker services.
+- Redis credentials for the API, collaboration, and worker services.
+- Object storage access keys for the API and worker services.
+- Internal mail relay credentials for the worker service, if the relay needs
+  them.
+
+#### 8.5.1 Connection from ESO to Passwordstate
+
+ESO has no built-in Passwordstate provider. The recommended connection uses
+the ESO webhook provider, which calls any HTTP API that returns JSON. The
+platform team owns the store. This section describes the pattern that the
+chart expects, so the team can confirm that their store matches it.
+
+The connection works as follows:
+
+1. A `ClusterSecretStore` uses the webhook provider to call the Passwordstate
+   REST API over HTTPS, with the organisation's certificate authority.
+2. The store sends the Passwordstate API key in the `APIKey` request header.
+   The key comes from a Kubernetes Secret in the ESO namespace, not from the
+   product's namespace.
+3. Each `ExternalSecret` in the product's chart gives a Passwordstate
+   password ID as its remote key. The store puts the ID in the request URL.
+4. The store reads the `Password` field from the JSON response and returns
+   it to ESO.
+
+The following example shows the shape of the store. Field names come from
+the ESO webhook provider and the Passwordstate API. Check them against the
+ESO and Passwordstate versions that the platform team runs.
+
+```yaml
+apiVersion: external-secrets.io/v1
+kind: ClusterSecretStore
+metadata:
+  name: passwordstate
+spec:
+  provider:
+    webhook:
+      url: "https://passwordstate.example.internal/api/passwords/{{ .remoteRef.key }}"
+      method: GET
+      headers:
+        APIKey: "{{ .auth.apikey }}"
+      result:
+        jsonPath: "$[0].Password"
+      secrets:
+        - name: auth
+          secretRef:
+            name: passwordstate-api-key
+            namespace: external-secrets
+      caProvider:
+        type: ConfigMap
+        name: internal-ca
+        namespace: external-secrets
+        key: ca.crt
+```
+
+The chart then requests a secret like this:
+
+```yaml
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: api-service
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: passwordstate
+  target:
+    name: api-service-secrets
+  data:
+    - secretKey: ENTRA_CLIENT_SECRET
+      remoteRef:
+        key: "1234"
+```
+
+This pattern has the following consequences:
+
+- Each request returns one value. A secret with several fields, such as a
+  user name and a password, needs one `data` entry for each field, and a
+  store that can read other fields, such as `UserName`.
+- A store that looks up entries by title instead of ID needs a different URL
+  and JSON path, such as a search on the product's password list.
+- The API key's scope sets what the store can read. Use a key for the
+  product's password list only, not a system-wide key.
+
+### 8.6 Observability
 
 The services meet the following observability requirements:
 
@@ -508,7 +620,7 @@ The services meet the following observability requirements:
 - Ship Grafana dashboards and alert rules in the Helm chart, compatible with
   Rancher Monitoring.
 
-### 8.6 Backup and restore
+### 8.7 Backup and restore
 
 The deployment meets the following backup requirements:
 
@@ -568,7 +680,7 @@ Table 15. Risks and mitigations
 | Yjs documents grow large on long-lived boards. | Slow board loading and high memory use. | Compact updates into snapshots, use garbage collection, and enforce the PRF-2 object limit. |
 | Proxies or ingress timeouts drop WebSocket connections. | Frequent reconnections. | Set long idle timeouts, send heartbeats, and reconnect automatically with backoff. |
 | The chosen object store gets no security fixes. For example, MinIO's community edition was archived in February 2026. | An unpatched store fails ISM patching controls and blocks authorisation. | Choose a supported, patched S3-compatible store before general availability (Q14). The product works with any S3-compatible store, so the choice doesn't affect the design. |
-| The Passwordstate sync operator's credential gives read access to the product's secrets. | Anyone who reads the credential can read the product's secrets. | Scope the credential to the product's password list, and limit which accounts can read the Kubernetes Secrets that the operator creates. |
+| The ESO store's Passwordstate credential can read the product's secrets, and the Kubernetes Secrets that ESO creates hold the values in the cluster. | Anyone who reads the credential or the Secrets can read the product's secrets. | Scope the store's credential to the product's password list, limit which accounts can read Secrets in the product's namespace, and turn on encryption at rest for Secrets in RKE2. |
 | The `Whiteboard.User` app role acts as the clearance check for staff and guests (IAM-11 and IAM-12). | An uncleared user or guest who gets the role can open PROTECTED boards. | Assign the role only through a group that the security team controls, and review its membership regularly. |
 | Miro content converts poorly. | Teams lose work or trust in the product. | Produce a report for each board (MIG-4). Run a trial migration on sample boards before bulk migration. |
 | Canvas apps are hard to make accessible. | Fails the WCAG requirement for some users. | Design keyboard and screen reader support from R1, and schedule an audit in R2. |
@@ -585,7 +697,7 @@ Table 16. Answered questions
 
 | ID | Question | Answer | Effect on this document |
 |---|---|---|---|
-| Q1 | Which cluster hosts the product? | On-premises RKE2 | Rewrote sections 8.1, 8.4, and 8.6 for on-premises hosting. |
+| Q1 | Which cluster hosts the product? | On-premises RKE2 | Rewrote sections 8.1, 8.4, and 8.7 for on-premises hosting. |
 | Q2 | What is the highest data classification that boards can hold? | PROTECTED | Added section 6.3 and expanded section 7.4. |
 | Q4 | Do teams need to migrate existing Miro boards? | Potentially yes | Added section 6.8 as P1, conditional on confirmation. |
 | Q7 | Which data residency requirements apply? | Resolved by on-premises hosting | All data stays on premises. No change needed. |
@@ -593,7 +705,8 @@ Table 16. Answered questions
 | Q9 | Does a user's clearance level exist in Entra ID? | Every user in Entra ID is cleared | Replaced the clearance check in IAM-11 and added a risk. |
 | Q10 | Can browsers cache PROTECTED content for offline editing? | Yes | Removed the condition from COL-5 and added COL-10. |
 | Q3 | Can Entra B2B guest users use the product? | Yes. Guests with Entra access are cleared. | Updated IAM-12. |
-| Q11 | Which S3-compatible object store is available? | MinIO, or any S3-compatible store | Updated sections 8.1 and 8.6, and added a risk. |
+| Q11 | Which S3-compatible object store is available? | MinIO, or any S3-compatible store | Updated sections 8.1 and 8.7, and added a risk. |
+| Q15 | Which operator syncs Passwordstate secrets into Kubernetes? | External Secrets Operator | Added section 8.5 and updated a risk. |
 
 ### 12.2 Remaining questions
 
@@ -612,9 +725,13 @@ The following questions need answers before or during R0:
 - **Q14**: Which supported S3-compatible store does the product use? The
   owner chooses one before general availability. If it's MinIO, it must be a
   supported, patched edition.
-- **Q15**: Which operator syncs Passwordstate secrets into Kubernetes, and how
-  does a workload request its secrets? The platform team runs one, and the
-  owner is confirming its name.
+- **Q16**: Does the platform team's ESO store match the pattern in
+  section 8.5.1? Specifically, confirm the following:
+  - The store's name and kind.
+  - Whether `ExternalSecret` resources identify entries by password ID or by
+    title.
+  - Which fields the store can return, such as `Password` and `UserName`.
+  - Whether the store's API key covers one password list or several.
 
 ## 13. References
 
@@ -630,7 +747,9 @@ The research for this document used the following sources:
 - [RKE2 documentation](https://docs.rke2.io/)
 - [MinIO CE in 2026: retired upstream, source-only, and what to use](https://www.glukhov.org/data-infrastructure/object-storage/minio-dead/)
 - [MinIO users complain after admin UI removed from Community Edition](https://blocksandfiles.com/2025/06/19/minio-removes-management-features-from-basic-community-edition-object-storage-code/)
-- [External Secrets Operator](https://github.com/external-secrets/external-secrets)
+- [External Secrets Operator](https://external-secrets.io/latest/)
+- [External Secrets Operator: Webhook provider](https://external-secrets.io/latest/provider/webhook/)
+- [Using External Secrets Operator with HTTP endpoints: a complete guide](https://zerotohero.dev/inbox/eso-webhook-provider/)
 - [Miro REST API](https://developers.miro.com/docs/rest-api-reference-guide)
 - [Information Security Manual (ISM)](https://www.cyber.gov.au/resources-business-and-government/essential-cyber-security/ism)
 - [Protective Security Policy Framework (PSPF)](https://www.protectivesecurity.gov.au/)
