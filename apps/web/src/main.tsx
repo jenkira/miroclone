@@ -6,6 +6,7 @@ import { api, type Me } from "./api.js";
 import { BoardView } from "./BoardView.js";
 import { Dashboard } from "./Dashboard.js";
 import { Local } from "./Local.js";
+import { clearOfflineCache } from "./offline.js";
 
 function useHash() {
   const [h, setH] = useState(location.hash);
@@ -18,7 +19,7 @@ function App() {
   const [me, setMe] = useState<Me | null | undefined>(undefined);
   // Local boards need no sign-in. They exist for development and performance checks.
   const local = /^#\/local(?:\/(\d+))?$/.exec(hash);
-  useEffect(() => { if (!local) api.me().then(setMe).catch(() => setMe(null)); }, [!!local]);
+  useEffect(() => { if (!local) api.me().then(setMe).catch(() => { setMe(null); void clearOfflineCache(); }); }, [!!local]);
   if (local) return <Local objects={Number(local[1] ?? 0)} />;
 
   if (me === undefined) return <p>Loading…</p>;

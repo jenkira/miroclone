@@ -7,6 +7,7 @@ import { Banner } from "./Banner.js";
 import { Canvas, colourFor, type CanvasApi } from "./Canvas.js";
 import { FormatBar } from "./FormatBar.js";
 import { ExportMenu } from "./ExportMenu.js";
+import { cacheBoard, clearOfflineCache } from "./offline.js";
 import { ShareDialog } from "./ShareDialog.js";
 import { Toolbar } from "./Toolbar.js";
 import type { Tool } from "./tools.js";
@@ -34,19 +35,23 @@ export function BoardView({ id, me }: { id: string; me: Me }) {
     provider.awareness?.setLocalStateField("user", { name: me.name, colour: colourFor(doc.clientID) });
     const board = new Board(doc, doc.clientID);
     // End-to-end tests read the board through this hook. It exists only in the development server.
-    if (import.meta.env.DEV) (window as unknown as { __board: Board }).__board = board;
+    if (import.meta.env.DEV) Object.assign(window, { __board: board, __provider: provider });
     return { doc, provider, socket, board };
   }, [id, me.name]);
 
   useEffect(() => {
-    const { provider, socket } = session;
+    const { provider, socket, doc } = session;
+    // A user who can reload offline also sees cached content, so the cache is cleared when the server ends the session.
+    const stopCache = cacheBoard(id, doc);
+    const onAuthFailed = () => { void clearOfflineCache(); };
+    provider.on("authenticationFailed", onAuthFailed);
     const onStatus = ({ status: s }: { status: string }) => setStatus(s === "connected" ? "connected" : s === "connecting" ? "connecting" : "disconnected");
     provider.on("status", onStatus);
     const aw = provider.awareness!;
     const onAw = () => setPeople([...aw.getStates().entries()].filter(([, s]) => s.user).map(([cid, s]) => ({ id: cid, name: s.user.name, colour: s.user.colour })));
     aw.on("change", onAw); onAw();
-    return () => { aw.off("change", onAw); provider.destroy(); socket.destroy(); };
-  }, [session]);
+    return () => { aw.off("change", onAw); provider.off("authenticationFailed", onAuthFailed); stopCache(); provider.destroy(); socket.destroy(); };
+  }, [session, id]);
 
   if (error) return <p role="alert">{error}</p>;
   if (!meta) return <p>Loading board…</p>;
