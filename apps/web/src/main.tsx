@@ -1,16 +1,29 @@
+import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
-import * as Y from "yjs";
-import { Banner } from "./Banner.js";
-import { Canvas } from "./Canvas.js";
+import { api, type Me } from "./api.js";
+import { BoardView } from "./BoardView.js";
+import { Dashboard } from "./Dashboard.js";
+import { Local } from "./Local.js";
 
-// R0 prototype: a local document. R1 connects it to the collaboration service.
-const doc = new Y.Doc();
-const classification = "OFFICIAL";
+function useHash() {
+  const [h, setH] = useState(location.hash);
+  useEffect(() => { const f = () => setH(location.hash); window.addEventListener("hashchange", f); return () => window.removeEventListener("hashchange", f); }, []);
+  return h;
+}
 
-createRoot(document.getElementById("root")!).render(
-  <div style={{ display: "flex", flexDirection: "column", height: "100vh", fontFamily: "system-ui" }}>
-    <Banner classification={classification} />
-    <Canvas doc={doc} readOnly={false} />
-    <Banner classification={classification} />
-  </div>,
-);
+function App() {
+  const hash = useHash();
+  const [me, setMe] = useState<Me | null | undefined>(undefined);
+  useEffect(() => { api.me().then(setMe).catch(() => setMe(null)); }, []);
+
+  // Local boards need no sign-in. They exist for development and performance checks.
+  const local = /^#\/local(?:\/(\d+))?$/.exec(hash);
+  if (local) return <Local objects={Number(local[1] ?? 0)} />;
+
+  if (me === undefined) return <p>Loading…</p>;
+  if (me === null) return <main style={{ fontFamily: "system-ui" }}><h1>Miroclone</h1><p><a href="/auth/login">Sign in with Microsoft</a></p></main>;
+  const board = /^#\/board\/([0-9a-f-]+)$/.exec(hash);
+  return board ? <BoardView id={board[1]!} me={me} /> : <Dashboard me={me} />;
+}
+
+createRoot(document.getElementById("root")!).render(<App />);

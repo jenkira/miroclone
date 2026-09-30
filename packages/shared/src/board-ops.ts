@@ -21,6 +21,15 @@ export class Board {
     return this.doc.transact(fn, this.origin) as T;
   }
 
+  /**
+   * Starts a new undo step. Discrete actions call it so quick successive actions don't merge.
+   * Drags (`move`) and text edits (`update`) don't, so they merge into one step.
+   */
+  private step<T>(fn: () => T): T {
+    this.undo.stopCapturing();
+    return this.tx(fn);
+  }
+
   get(id: string): BoardObject | undefined { return this.objects.get(id); }
 
   /** Objects from back to front. */
@@ -30,7 +39,7 @@ export class Board {
 
   add(input: Input): BoardObject {
     if (this.objects.size >= MAX_OBJECTS_PER_BOARD) throw new BoardLimitError("Board is full.");
-    return this.tx(() => {
+    return this.step(() => {
       const top = this.list().at(-1)?.index ?? null;
       const obj = boardObjectSchema.parse({
         id: crypto.randomUUID(),
@@ -62,7 +71,7 @@ export class Board {
 
   /** Deletes objects, and any connector that attached to them. */
   remove(ids: string[]): void {
-    this.tx(() => {
+    this.step(() => {
       const gone = new Set(ids.filter((id) => !this.objects.get(id)?.locked));
       for (const o of this.objects.values()) {
         if (o.type === "connector" && (gone.has(o.from) || gone.has(o.to))) gone.add(o.id);
@@ -72,14 +81,14 @@ export class Board {
   }
 
   bringToFront(id: string): void {
-    this.tx(() => {
+    this.step(() => {
       const top = this.list().at(-1);
       if (top && top.id !== id) this.update(id, { index: generateKeyBetween(top.index, null) });
     });
   }
 
   sendToBack(id: string): void {
-    this.tx(() => {
+    this.step(() => {
       const bottom = this.list()[0];
       if (bottom && bottom.id !== id) this.update(id, { index: generateKeyBetween(null, bottom.index) });
     });
@@ -87,18 +96,18 @@ export class Board {
 
   group(ids: string[]): string {
     const groupId = crypto.randomUUID();
-    this.tx(() => { for (const id of ids) this.update(id, { groupId }); });
+    this.step(() => { for (const id of ids) this.update(id, { groupId }); });
     return groupId;
   }
 
   ungroup(groupId: string): void {
-    this.tx(() => {
+    this.step(() => {
       for (const o of this.objects.values()) if (o.groupId === groupId) this.update(o.id, { groupId: undefined });
     });
   }
 
   setLocked(ids: string[], locked: boolean): void {
-    this.tx(() => { for (const id of ids) this.update(id, { locked }); });
+    this.step(() => { for (const id of ids) this.update(id, { locked }); });
   }
 
   /** Returns the ids in a selection, expanded to whole groups. */
@@ -125,7 +134,7 @@ export class Board {
 
   /** Pastes a clipboard payload with new ids, offset so it doesn't hide the original. Works across boards. */
   paste(items: BoardObject[], offset = 20): string[] {
-    return this.tx(() => {
+    return this.step(() => {
       const ids = new Map(items.map((o) => [o.id, crypto.randomUUID()]));
       const groups = new Map<string, string>();
       const created: string[] = [];

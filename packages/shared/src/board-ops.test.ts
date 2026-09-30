@@ -78,6 +78,28 @@ describe("undo and redo", () => {
   });
 });
 
+describe("undo steps", () => {
+  it("keeps quick successive actions as separate steps", () => {
+    const b = new Board(new Y.Doc());
+    const a = b.add(sticky());
+    const c = b.add(sticky());
+    b.remove([c.id]);
+    b.undo.undo();
+    expect(b.get(c.id)).toBeDefined();
+    b.undo.undo();
+    expect(b.get(c.id)).toBeUndefined();
+    expect(b.get(a.id)).toBeDefined();
+  });
+  it("merges a drag into one step", () => {
+    const b = new Board(new Y.Doc());
+    const a = b.add(sticky({ x: 0 }));
+    b.undo.stopCapturing();
+    for (let i = 0; i < 5; i++) b.move([a.id], 10, 0);
+    b.undo.undo();
+    expect(b.get(a.id)?.x).toBe(0);
+  });
+});
+
 describe("copy and paste", () => {
   it("pastes across boards with new ids and remapped connectors", () => {
     const one = new Board(new Y.Doc()), two = new Board(new Y.Doc());

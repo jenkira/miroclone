@@ -20,6 +20,9 @@ importers:
 
   apps/web:
     dependencies:
+      '@hocuspocus/provider':
+        specifier: ^2.15.3
+        version: 2.15.3(y-protocols@1.0.7(yjs@13.6.33))(yjs@13.6.33)
       '@miroclone/shared':
         specifier: workspace:*
         version: link:../../packages/shared
@@ -32,6 +35,9 @@ importers:
       react-dom:
         specifier: ^18.3.0
         version: 18.3.1(react@18.3.1)
+      y-protocols:
+        specifier: ^1.0.7
+        version: 1.0.7(yjs@13.6.33)
       yjs:
         specifier: ^13.6.0
         version: 13.6.33
