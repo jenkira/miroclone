@@ -3,10 +3,10 @@ import cookie from "@fastify/cookie";
 import { validateClaims, type EntraClaims } from "@miroclone/shared";
 import { audit } from "./audit.js";
 import { pkceChallenge, pkceVerifier, type OidcClient } from "./oidc.js";
-import { newId, SESSION_COOKIE, SessionManager } from "./session.js";
+import { newId, SESSION_COOKIE, SessionManager } from "@miroclone/server-core";
 export { SESSION_COOKIE };
 import { upsertUser } from "./boards.js";
-import type { Db } from "./db.js";
+import type { Db } from "@miroclone/server-core";
 import { boardRoutes } from "./routes.js";
 
 export interface AppOptions {

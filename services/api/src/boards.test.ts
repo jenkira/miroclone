@@ -1,7 +1,7 @@
 import { PGlite } from "@electric-sql/pglite";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import * as boards from "./boards.js";
-import { migrate, type Db } from "./db.js";
+import { migrate, type Db } from "@miroclone/server-core";
 
 const ann = { id: "ann", groups: ["g-eng"] };
 const bob = { id: "bob", groups: [] };

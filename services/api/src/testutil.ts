@@ -1,9 +1,9 @@
 import { PGlite } from "@electric-sql/pglite";
 import type { EntraClaims } from "@miroclone/shared";
 import { buildApp } from "./app.js";
-import { migrate, type Db } from "./db.js";
+import { migrate, type Db } from "@miroclone/server-core";
 import type { OidcClient } from "./oidc.js";
-import { MemorySessionStore, SessionManager } from "./session.js";
+import { MemorySessionStore, SessionManager } from "@miroclone/server-core";
 
 const db = new PGlite() as unknown as Db;
 await migrate(db);

@@ -1,13 +1,15 @@
 import { canEditContent, type BoardRole } from "@miroclone/shared";
 
+export interface CollabUser { id: string; name: string; groups: string[] }
+
 /** Resolves a session cookie to a user, and a user's role on a board. */
 export interface AccessResolver {
-  userFromCookie(cookie: string | undefined): Promise<{ id: string; name: string } | undefined>;
-  roleOnBoard(userId: string, boardId: string): Promise<BoardRole | undefined>;
+  userFromCookie(cookie: string | undefined): Promise<CollabUser | undefined>;
+  roleOnBoard(user: CollabUser, boardId: string): Promise<BoardRole | undefined>;
 }
 
 export interface AuthResult {
-  user: { id: string; name: string };
+  user: CollabUser;
   role: BoardRole;
   readOnly: boolean;
 }
@@ -24,7 +26,7 @@ export async function authenticate(
 ): Promise<AuthResult> {
   const user = await resolver.userFromCookie(cookie);
   if (!user) throw new Error("unauthenticated");
-  const role = await resolver.roleOnBoard(user.id, boardId);
+  const role = await resolver.roleOnBoard(user, boardId);
   if (!role) throw new Error("forbidden");
   return { user, role, readOnly: !canEditContent(role) };
 }

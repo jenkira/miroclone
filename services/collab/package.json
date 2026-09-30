@@ -3,11 +3,27 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "scripts": { "typecheck": "tsc -p .", "test": "vitest run", "build": "tsc -p .", "start": "node --import tsx src/main.ts" },
+  "scripts": {
+    "typecheck": "tsc -p .",
+    "test": "vitest run",
+    "build": "tsc -p .",
+    "start": "node --import tsx src/main.ts"
+  },
   "dependencies": {
     "@hocuspocus/server": "^2.15.0",
+    "@miroclone/server-core": "workspace:*",
     "@miroclone/shared": "workspace:*",
+    "cookie": "^2.0.1",
+    "ioredis": "^5.11.1",
+    "pg": "^8.23.1",
     "yjs": "^13.6.0"
   },
-  "devDependencies": { "tsx": "^4.19.0" }
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.5.8",
+    "@hocuspocus/provider": "^2.15.3",
+    "@types/pg": "^8.23.1",
+    "@types/ws": "^8.18.2",
+    "tsx": "^4.19.0",
+    "ws": "^8.22.0"
+  }
 }

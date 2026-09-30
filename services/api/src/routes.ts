@@ -2,8 +2,8 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import { boardRoles, defaultClassifications, type BoardRole } from "@miroclone/shared";
 import { audit } from "./audit.js";
 import * as boards from "./boards.js";
-import type { Db } from "./db.js";
-import { SESSION_COOKIE, type Session, type SessionManager } from "./session.js";
+import type { Db } from "@miroclone/server-core";
+import { SESSION_COOKIE, type Session, type SessionManager } from "@miroclone/server-core";
 
 declare module "fastify" {
   interface FastifyRequest { session?: Session }

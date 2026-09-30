@@ -1,0 +1,9 @@
+{
+  "name": "@miroclone/server-core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "scripts": { "typecheck": "tsc -p .", "test": "vitest run" },
+  "dependencies": { "@miroclone/shared": "workspace:*", "ioredis": "^5.4.0" }
+}

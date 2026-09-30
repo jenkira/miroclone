@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { authenticate, type AccessResolver } from "./auth.js";
 
 const resolver = (role?: "viewer" | "editor"): AccessResolver => ({
-  userFromCookie: async (c) => (c ? { id: "u", name: "U" } : undefined),
+  userFromCookie: async (c) => (c ? { id: "u", name: "U", groups: [] } : undefined),
   roleOnBoard: async () => role,
 });
 

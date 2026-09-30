@@ -11,8 +11,10 @@
   },
   "dependencies": {
     "@fastify/cookie": "^11.1.2",
+    "@miroclone/server-core": "workspace:*",
     "@miroclone/shared": "workspace:*",
     "fastify": "^5.0.0",
+    "ioredis": "^5.11.1",
     "jose": "^6.2.12",
     "pg": "^8.23.1"
   },
