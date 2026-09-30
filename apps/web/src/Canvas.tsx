@@ -1,12 +1,25 @@
 import { useEffect, useRef, useState } from "react";
 import { Application, Container, Graphics } from "pixi.js";
-import type { Awareness } from "y-protocols/awareness";
 import type * as Y from "yjs";
-import { Board, type BoardObject } from "@miroclone/shared";
-import { hitTest, intersects, normaliseRect, strokesHit, type Point } from "./geometry.js";
-import { drawCursor, drawObject, drawSelection, Scene, withDefaults } from "./render.js";
+import type { Awareness } from "y-protocols/awareness";
+import { isSafeLink, Board, type BoardObject } from "@miroclone/shared";
+import { boundsOf } from "@miroclone/shared";
+import { hitHandle, hitTest, intersects, normaliseRect, resizeFromHandle, rotationFor, strokesHit, type Handle, type Point } from "./geometry.js";
+import { drawCursor, drawObject, drawSelection, Scene, textHeight, withDefaults } from "./render.js";
 import { objectForGesture, type Tool } from "./tools.js";
-import { screenToWorld, zoomAt, type Viewport } from "./viewport.js";
+import { fitRect, screenToWorld, zoomAt, type Viewport } from "./viewport.js";
+
+/** What the parent can ask of the canvas. */
+export interface CanvasApi {
+  selection(): string[];
+  select(ids: string[]): void;
+  /** Zooms to show every object (CNV-1). */
+  fit(): void;
+  /** Zooms to show the selected objects (CNV-1). */
+  fitSelection(): void;
+  /** Moves the viewport to a world point, for jumping to another user (COL-3). */
+  centreOn(p: Point): void;
+}
 
 export interface CanvasProps {
   board: Board;
@@ -14,28 +27,51 @@ export interface CanvasProps {
   readOnly: boolean;
   awareness?: Awareness;
   onToolDone?: () => void;
-  /** Receives a function that returns the selected object ids. */
-  selectionRef?: { current: () => string[] };
+  apiRef?: { current: CanvasApi | null };
+  onSelect?: (ids: string[]) => void;
 }
 
 /** Clipboard shared by every board in this tab, so paste works between boards (CNV-11). It clears on reload and sign-out (COL-10). */
 let clipboard: BoardObject[] = [];
+/** Grows or shrinks a text object to fit its content. */
+export function fitTextHeight(board: Board, id: string) {
+  const o = board.get(id);
+  if (o?.type === "text") {
+    const h = textHeight(o);
+    if (h !== o.height) board.update(id, { height: h });
+  }
+}
+
 export const clearClipboard = () => { clipboard = []; };
 
 const CURSOR_COLOURS = ["#e53935", "#8e24aa", "#3949ab", "#00897b", "#f4511e", "#6d4c41"];
 export const colourFor = (id: number) => CURSOR_COLOURS[id % CURSOR_COLOURS.length]!;
 
-export function Canvas({ board, tool, readOnly, awareness, onToolDone, selectionRef }: CanvasProps) {
+type Gesture =
+  | { kind: "pan"; last: { x: number; y: number } }
+  | { kind: "move"; last: Point }
+  | { kind: "draw"; path: Point[] }
+  | { kind: "marquee"; path: Point[] }
+  | { kind: "erase" }
+  | { kind: "resize"; id: string; handle: Exclude<Handle, "rotate"> }
+  | { kind: "rotate"; id: string };
+
+const resizable = (o: BoardObject) => o.type !== "connector" && o.type !== "stroke";
+
+export function Canvas({ board, tool, readOnly, awareness, onToolDone, apiRef, onSelect }: CanvasProps) {
   const host = useRef<HTMLDivElement>(null);
   const toolRef = useRef(tool);
   const roRef = useRef(readOnly);
+  const onSelectRef = useRef(onSelect);
   const selection = useRef<string[]>([]);
   const view = useRef<Viewport>({ x: 0, y: 0, zoom: 1 });
   const redrawRef = useRef<() => void>(() => {});
   const [editing, setEditing] = useState<{ id: string; left: number; top: number; width: number; height: number; text: string } | null>(null);
-  if (selectionRef) selectionRef.current = () => selection.current;
+  const editingRef = useRef(editing);
   toolRef.current = tool;
   roRef.current = readOnly;
+  onSelectRef.current = onSelect;
+  editingRef.current = editing;
 
   useEffect(() => {
     const el = host.current!;
@@ -53,16 +89,44 @@ export function Canvas({ board, tool, readOnly, awareness, onToolDone, selection
       const v = view.current;
       scene.cull({ x: -v.x / v.zoom, y: -v.y / v.zoom, width: el.clientWidth / v.zoom, height: el.clientHeight / v.zoom }, v.zoom);
     };
-    const apply = () => { world.position.set(view.current.x, view.current.y); world.scale.set(view.current.zoom); cull(); };
 
     const drawSelections = () => {
       overlay.removeChildren().forEach((c) => c.destroy({ children: true }));
-      for (const id of selection.current) { const o = board.get(id); if (o) overlay.addChild(drawSelection(o)); }
+      const only = selection.current.length === 1 ? board.get(selection.current[0]!) : undefined;
+      for (const id of selection.current) {
+        const o = board.get(id);
+        if (o) overlay.addChild(drawSelection(o, { zoom: view.current.zoom, handles: !roRef.current && !!only && only.id === o.id && !o.locked && o.type !== "connector" }));
+      }
     };
-    /** Redraws the selection outlines. Object changes arrive through the scene. */
     const redraw = () => { if (ready) drawSelections(); };
     redrawRef.current = redraw;
+
+    const apply = () => {
+      world.position.set(view.current.x, view.current.y);
+      world.scale.set(view.current.zoom);
+      cull();
+      drawSelections();
+    };
+    const setSel = (ids: string[]) => {
+      selection.current = ids;
+      onSelectRef.current?.(ids);
+      redraw();
+    };
     const onObjects = (event: Y.YMapEvent<BoardObject>) => { if (!ready) return; scene.apply(event); cull(); drawSelections(); };
+
+    const showRect = (r: { x: number; y: number; width: number; height: number }) => {
+      view.current = fitRect(r, el.clientWidth, el.clientHeight);
+      apply();
+    };
+    if (apiRef) {
+      apiRef.current = {
+        selection: () => selection.current,
+        select: setSel,
+        fit: () => showRect(boundsOf(board.list(), 0)),
+        fitSelection: () => { const objs = selection.current.map((id) => board.get(id)).filter(Boolean) as BoardObject[]; if (objs.length) showRect(boundsOf(objs, 0)); },
+        centreOn: (p) => { view.current = { ...view.current, x: el.clientWidth / 2 - p.x * view.current.zoom, y: el.clientHeight / 2 - p.y * view.current.zoom }; apply(); },
+      };
+    }
 
     const drawCursors = () => {
       if (!ready || !awareness) return;
@@ -93,86 +157,94 @@ export function Canvas({ board, tool, readOnly, awareness, onToolDone, selection
       const r = el.getBoundingClientRect();
       return screenToWorld(view.current, e.clientX - r.left, e.clientY - r.top);
     };
-    let gesture: null | { kind: "pan" | "move" | "draw" | "marquee" | "erase"; path: Point[]; last: { x: number; y: number }; ids?: string[] } = null;
+    let gesture: Gesture | null = null;
 
     const down = (e: PointerEvent) => {
-      if (editing) return;
+      if (editingRef.current) return;
       el.setPointerCapture(e.pointerId);
       const p = pos(e);
       const t = toolRef.current;
       const ro = roRef.current;
-      const screen = { x: e.clientX, y: e.clientY };
-      if (e.button === 1 || e.button === 2) { gesture = { kind: "pan", path: [p], last: screen }; return; }
+      if (e.button === 1 || e.button === 2) { gesture = { kind: "pan", last: { x: e.clientX, y: e.clientY } }; return; }
       if (t === "select") {
+        // Handles first, because they sit on top of the object.
+        const only = selection.current.length === 1 ? board.get(selection.current[0]!) : undefined;
+        if (only && !ro && !only.locked && only.type !== "connector") {
+          const h = hitHandle(only, p, view.current.zoom);
+          if (h === "rotate") { gesture = { kind: "rotate", id: only.id }; board.undo.stopCapturing(); return; }
+          if (h && resizable(only)) { gesture = { kind: "resize", id: only.id, handle: h }; board.undo.stopCapturing(); return; }
+        }
         const hit = hitTest(board.list(), p);
         if (hit) {
-          if (!selection.current.includes(hit.id)) selection.current = e.shiftKey ? [...selection.current, hit.id] : [hit.id];
-          selection.current = board.expandGroups(selection.current);
-          redraw();
-          gesture = ro ? { kind: "pan", path: [p], last: screen } : { kind: "move", path: [p], last: { x: p.x, y: p.y } };
+          // Ctrl or Cmd plus click follows a link.
+          if ((e.ctrlKey || e.metaKey) && hit.type === "text" && hit.link && isSafeLink(hit.link)) { window.open(hit.link, "_blank", "noopener,noreferrer"); return; }
+          setSel(board.expandGroups(selection.current.includes(hit.id) ? selection.current : e.shiftKey ? [...selection.current, hit.id] : [hit.id]));
+          gesture = ro ? { kind: "pan", last: { x: e.clientX, y: e.clientY } } : { kind: "move", last: p };
+          if (!ro) board.undo.stopCapturing();
         } else {
-          selection.current = [];
-          redraw();
-          gesture = { kind: "marquee", path: [p], last: screen };
+          setSel([]);
+          gesture = { kind: "marquee", path: [p] };
         }
         return;
       }
       if (ro) return;
-      if (t === "eraser") { gesture = { kind: "erase", path: [p], last: screen }; board.remove(strokesHit(board.list(), p)); return; }
-      gesture = { kind: "draw", path: [p], last: screen };
+      if (t === "eraser") { gesture = { kind: "erase" }; board.remove(strokesHit(board.list(), p)); return; }
+      gesture = { kind: "draw", path: [p] };
     };
 
     const move = (e: PointerEvent) => {
       const p = pos(e);
       if (awareness) awareness.setLocalStateField("cursor", { x: p.x, y: p.y });
-      if (!gesture) return;
-      if (gesture.kind === "pan") {
-        view.current.x += e.clientX - gesture.last.x; view.current.y += e.clientY - gesture.last.y;
-        gesture.last = { x: e.clientX, y: e.clientY }; apply();
-      } else if (gesture.kind === "move") {
-        board.move(selection.current, p.x - gesture.last.x, p.y - gesture.last.y);
-        gesture.last = { x: p.x, y: p.y };
-      } else if (gesture.kind === "erase") {
+      const g = gesture;
+      if (!g) return;
+      if (g.kind === "pan") {
+        view.current.x += e.clientX - g.last.x; view.current.y += e.clientY - g.last.y;
+        g.last = { x: e.clientX, y: e.clientY }; apply();
+      } else if (g.kind === "move") {
+        board.move(selection.current, p.x - g.last.x, p.y - g.last.y);
+        g.last = p;
+      } else if (g.kind === "resize") {
+        const o = board.get(g.id);
+        if (o) board.update(g.id, resizeFromHandle(o, g.handle, p, e.shiftKey));
+      } else if (g.kind === "rotate") {
+        const o = board.get(g.id);
+        if (o) board.update(g.id, { rotation: rotationFor(o, p, e.shiftKey) });
+      } else if (g.kind === "erase") {
         board.remove(strokesHit(board.list(), p));
       } else {
-        gesture.path.push(p);
-        if (gesture.kind === "draw") drawPreview(gesture.path);
-        if (gesture.kind === "marquee") drawMarquee(gesture.path);
+        g.path.push(p);
+        if (g.kind === "draw") drawPreview(g.path);
+        if (g.kind === "marquee") drawMarquee(g.path);
       }
     };
 
+    const clearPreview = () => preview.removeChildren().forEach((c) => c.destroy({ children: true }));
     const drawPreview = (path: Point[]) => {
-      preview.removeChildren().forEach((c) => c.destroy({ children: true }));
+      clearPreview();
       const o = objectForGesture(toolRef.current, path, board.list());
       const shown = o && o.type !== "connector" ? withDefaults(o) : undefined;
-      if (shown) {
-        preview.addChild(drawObject(shown, board).node);
-      } else if (o) {
-        const a = path[0]!, b = path.at(-1)!;
-        preview.addChild(new Graphics().moveTo(a.x, a.y).lineTo(b.x, b.y).stroke({ width: 2, color: 0x1976d2 }));
-      }
+      if (shown) preview.addChild(drawObject(shown, board).node);
+      else if (o) { const a = path[0]!, b = path.at(-1)!; preview.addChild(new Graphics().moveTo(a.x, a.y).lineTo(b.x, b.y).stroke({ width: 2, color: 0x1976d2 })); }
     };
     const drawMarquee = (path: Point[]) => {
-      preview.removeChildren().forEach((c) => c.destroy({ children: true }));
+      clearPreview();
       const r = normaliseRect(path[0]!, path.at(-1)!);
       preview.addChild(new Graphics().rect(r.x, r.y, r.width, r.height).fill({ color: 0x1976d2, alpha: 0.1 }).stroke({ width: 1, color: 0x1976d2 }));
     };
 
     const up = () => {
       const g = gesture; gesture = null;
-      preview.removeChildren().forEach((c) => c.destroy({ children: true }));
+      clearPreview();
       if (!g) return;
       if (g.kind === "marquee" && g.path.length > 1) {
         const r = normaliseRect(g.path[0]!, g.path.at(-1)!);
-        selection.current = board.expandGroups(board.list().filter((o) => o.type !== "connector" && intersects(r, o)).map((o) => o.id));
-        redraw();
+        setSel(board.expandGroups(board.list().filter((o) => o.type !== "connector" && intersects(r, o)).map((o) => o.id)));
       }
       if (g.kind === "draw") {
         const o = objectForGesture(toolRef.current, g.path, board.list());
         if (o) {
           const made = board.add(o as never);
-          selection.current = [made.id];
-          redraw();
+          setSel([made.id]);
           if (made.type === "sticky" || made.type === "text") startEdit(made.id);
           onToolDone?.();
         }
@@ -181,12 +253,9 @@ export function Canvas({ board, tool, readOnly, awareness, onToolDone, selection
 
     const startEdit = (id: string) => {
       const o = board.get(id);
-      if (!o || roRef.current || !("text" in o || o.type === "text")) return;
+      if (!o || roRef.current || !("text" in o)) return;
       const v = view.current;
-      setEditing({
-        id, left: o.x * v.zoom + v.x, top: o.y * v.zoom + v.y, width: o.width * v.zoom, height: o.height * v.zoom,
-        text: o.type === "text" ? o.html.replace(/<[^>]*>/g, "") : (o as { text: string }).text,
-      });
+      setEditing({ id, left: o.x * v.zoom + v.x, top: o.y * v.zoom + v.y, width: Math.max(o.width * v.zoom, 120), height: Math.max(o.height * v.zoom, 40), text: o.text });
     };
     const dbl = (e: MouseEvent) => {
       const hit = hitTest(board.list(), pos(e));
@@ -201,35 +270,45 @@ export function Canvas({ board, tool, readOnly, awareness, onToolDone, selection
     };
 
     const key = (e: KeyboardEvent) => {
-      if ((e.target as HTMLElement).tagName === "TEXTAREA") return;
+      const tag = (e.target as HTMLElement).tagName;
+      if (tag === "TEXTAREA" || tag === "INPUT" || tag === "SELECT") return;
       const mod = e.ctrlKey || e.metaKey;
+      const k = e.key.toLowerCase();
       const ro = roRef.current;
-      if (mod && e.key.toLowerCase() === "z" && !ro) { e.preventDefault(); e.shiftKey ? board.undo.redo() : board.undo.undo(); }
-      else if (mod && e.key.toLowerCase() === "y" && !ro) { e.preventDefault(); board.undo.redo(); }
-      else if (mod && e.key.toLowerCase() === "c") { clipboard = board.copy(selection.current); }
-      else if (mod && e.key.toLowerCase() === "x" && !ro) { clipboard = board.copy(selection.current); board.remove(selection.current); selection.current = []; }
-      else if (mod && e.key.toLowerCase() === "v" && !ro) { selection.current = board.paste(clipboard); redraw(); }
-      else if (mod && e.key.toLowerCase() === "d" && !ro) { e.preventDefault(); selection.current = board.paste(board.copy(selection.current)); redraw(); }
-      else if (mod && e.key.toLowerCase() === "g" && !ro) { e.preventDefault(); e.shiftKey ? selection.current.forEach((id) => { const g = board.get(id)?.groupId; if (g) board.ungroup(g); }) : board.group(selection.current); }
-      else if ((e.key === "Delete" || e.key === "Backspace") && !ro) { board.remove(selection.current); selection.current = []; }
-      else if (e.key === "Escape") { selection.current = []; redraw(); }
-      else if (e.key.startsWith("Arrow") && !ro && selection.current.length) {
+      const sel = selection.current;
+      if (e.shiftKey && e.key === "!") { e.preventDefault(); showRect(boundsOf(board.list(), 0)); }          // Shift+1
+      else if (e.shiftKey && e.key === "@") { e.preventDefault(); apiRef?.current?.fitSelection(); }          // Shift+2
+      else if (mod && k === "z" && !ro) { e.preventDefault(); e.shiftKey ? board.undo.redo() : board.undo.undo(); }
+      else if (mod && k === "y" && !ro) { e.preventDefault(); board.undo.redo(); }
+      else if (mod && k === "c") { clipboard = board.copy(sel); }
+      else if (mod && k === "x" && !ro) { clipboard = board.copy(sel); board.remove(sel); setSel([]); }
+      else if (mod && k === "v" && !ro) { setSel(board.paste(clipboard)); }
+      else if (mod && k === "d" && !ro) { e.preventDefault(); setSel(board.paste(board.copy(sel))); }
+      else if (mod && k === "g" && !ro) { e.preventDefault(); e.shiftKey ? sel.forEach((id) => { const g = board.get(id)?.groupId; if (g) board.ungroup(g); }) : board.group(sel); }
+      else if (mod && k === "l" && !ro) { e.preventDefault(); const locked = !sel.every((id) => board.get(id)?.locked); board.setLocked(sel, locked); redraw(); }
+      else if (e.key === "]" && !ro && sel.length === 1) board.bringToFront(sel[0]!);
+      else if (e.key === "[" && !ro && sel.length === 1) board.sendToBack(sel[0]!);
+      else if ((e.key === "Delete" || e.key === "Backspace") && !ro) { board.remove(sel); setSel([]); }
+      else if (e.key === "Escape") setSel([]);
+      else if (e.key.startsWith("Arrow") && !ro && sel.length) {
         e.preventDefault();
         const d = e.shiftKey ? 10 : 1;
-        board.move(selection.current, e.key === "ArrowLeft" ? -d : e.key === "ArrowRight" ? d : 0, e.key === "ArrowUp" ? -d : e.key === "ArrowDown" ? d : 0);
+        board.move(sel, e.key === "ArrowLeft" ? -d : e.key === "ArrowRight" ? d : 0, e.key === "ArrowUp" ? -d : e.key === "ArrowDown" ? d : 0);
       }
     };
 
+    const noMenu = (e: Event) => e.preventDefault();
     el.addEventListener("pointerdown", down);
     el.addEventListener("pointermove", move);
     el.addEventListener("pointerup", up);
     el.addEventListener("dblclick", dbl);
     el.addEventListener("wheel", wheel, { passive: false });
-    el.addEventListener("contextmenu", (e) => e.preventDefault());
+    el.addEventListener("contextmenu", noMenu);
     window.addEventListener("keydown", key);
 
     return () => {
       disposed = true;
+      if (apiRef) apiRef.current = null;
       board.objects.unobserve(onObjects);
       awareness?.off("change", drawCursors);
       el.removeEventListener("pointerdown", down);
@@ -237,18 +316,16 @@ export function Canvas({ board, tool, readOnly, awareness, onToolDone, selection
       el.removeEventListener("pointerup", up);
       el.removeEventListener("dblclick", dbl);
       el.removeEventListener("wheel", wheel);
+      el.removeEventListener("contextmenu", noMenu);
       window.removeEventListener("keydown", key);
       try { app.destroy(true, { children: true }); } catch { /* not initialised */ }
     };
-    // editing is intentionally read through closure state only at pointer time.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [board, awareness]);
+  }, [board, awareness, apiRef]);
 
   const commit = (text: string) => {
     if (!editing) return;
-    const o = board.get(editing.id);
-    if (o?.type === "text") board.update(editing.id, { html: text } as never);
-    else if (o) board.update(editing.id, { text } as never);
+    board.update(editing.id, { text } as never);
+    fitTextHeight(board, editing.id);
     setEditing(null);
     redrawRef.current();
   };

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import { Board } from "./board-ops.js";
-import { boundsOf, exportJson, exportSvg, importJson } from "./export.js";
+import { boundsOf, exportJson, rotatedExtent, exportSvg, importJson } from "./export.js";
 
 function sample() {
   const b = new Board(new Y.Doc());
@@ -34,8 +34,48 @@ describe("exportSvg", () => {
   it("rejects an unknown classification", () => {
     expect(() => exportSvg(sample(), { classification: "SECRET" })).toThrow();
   });
+  it("includes rotated objects in the export bounds", () => {
+    // A 300x100 box turned 90 degrees around (150, 50) covers x 100..200 and y -100..200.
+    const e = rotatedExtent({ x: 0, y: 0, width: 300, height: 100, rotation: 90 });
+    expect(e.x).toBeCloseTo(100); expect(e.y).toBeCloseTo(-100); expect(e.width).toBeCloseTo(100); expect(e.height).toBeCloseTo(300);
+    const b = new Board(new Y.Doc());
+    b.add({ type: "sticky", x: 0, y: 0, width: 300, height: 100, rotation: 90 });
+    expect(boundsOf(b.list(), 0).y).toBeCloseTo(-100);
+    expect(rotatedExtent({ x: 0, y: 0, width: 300, height: 100, rotation: 0 })).toEqual({ x: 0, y: 0, width: 300, height: 100 });
+  });
   it("frames an empty board", () => {
     expect(boundsOf([]).width).toBeGreaterThan(0);
+  });
+});
+
+describe("text export", () => {
+  const text = (extra: Record<string, unknown>) => {
+    const b = new Board(new Y.Doc());
+    b.add({ type: "text", x: 0, y: 0, width: 200, height: 60, text: "one\ntwo", ...extra });
+    return exportSvg(b.list(), { classification: "OFFICIAL" });
+  };
+  it("applies formatting and list markers", () => {
+    const svg = text({ bold: true, italic: true, underline: true, size: 24, align: "center", list: "number" });
+    expect(svg).toContain('font-weight="700"');
+    expect(svg).toContain('font-style="italic"');
+    expect(svg).toContain('text-decoration="underline"');
+    expect(svg).toContain('text-anchor="middle"');
+    expect(svg).toContain("1. one");
+    expect(svg).toContain("2. two");
+  });
+  it("wraps a safe link and refuses an unsafe one", () => {
+    expect(text({ link: "https://example.test/a?b=1&c=2" })).toContain('<a href="https://example.test/a?b=1&amp;c=2">');
+    const b = new Board(new Y.Doc());
+    expect(() => b.add({ type: "text", link: "javascript:alert(1)" })).toThrow();
+    expect(() => b.add({ type: "text", link: "data:text/html,x" })).toThrow();
+  });
+  it("rotates an object about its centre", () => {
+    const b = new Board(new Y.Doc());
+    b.add({ type: "sticky", x: 0, y: 0, width: 100, height: 100, rotation: 45 });
+    expect(exportSvg(b.list(), { classification: "OFFICIAL" })).toContain('transform="rotate(45 50 50)"');
+  });
+  it("escapes text content", () => {
+    expect(text({ text: "<img onerror=x>" })).toContain("&lt;img onerror=x&gt;");
   });
 });
 

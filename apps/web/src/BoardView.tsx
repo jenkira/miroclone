@@ -4,7 +4,8 @@ import * as Y from "yjs";
 import { Board } from "@miroclone/shared";
 import { api, type BoardSummary, type Me } from "./api.js";
 import { Banner } from "./Banner.js";
-import { Canvas, colourFor } from "./Canvas.js";
+import { Canvas, colourFor, type CanvasApi } from "./Canvas.js";
+import { FormatBar } from "./FormatBar.js";
 import { ExportMenu } from "./ExportMenu.js";
 import { ShareDialog } from "./ShareDialog.js";
 import { Toolbar } from "./Toolbar.js";
@@ -17,7 +18,8 @@ export function BoardView({ id, me }: { id: string; me: Me }) {
   const [error, setError] = useState<string | null>(null);
   const [tool, setTool] = useState<Tool>("select");
   const [status, setStatus] = useState<Status>("connecting");
-  const selectionRef = useRef<() => string[]>(() => []);
+  const apiRef = useRef<CanvasApi | null>(null);
+  const [selected, setSelected] = useState<string[]>([]);
   const [sharing, setSharing] = useState(false);
   const [people, setPeople] = useState<{ id: number; name: string; colour: string }[]>([]);
 
@@ -59,14 +61,21 @@ export function BoardView({ id, me }: { id: string; me: Me }) {
         <span aria-live="polite">{status === "connected" ? "Saved automatically" : status === "connecting" ? "Connecting…" : "Offline. Changes merge when you reconnect."}</span>
         {readOnly && <span>View only</span>}
         {meta.role === "owner" && <button onClick={() => setSharing(true)}>Share</button>}
-        <ExportMenu board={session.board} title={meta.title} classification={meta.classification} selection={() => selectionRef.current()}
+        <ExportMenu board={session.board} title={meta.title} classification={meta.classification} selection={() => apiRef.current?.selection() ?? []}
           authorise={(format, scope) => api.recordExport(id, format, scope) as Promise<void>} />
         <span style={{ marginLeft: "auto", display: "flex", gap: 4 }} aria-label="People on this board">
-          {people.map((p) => <span key={p.id} title={p.name} style={{ background: p.colour, color: "#fff", borderRadius: 12, padding: "0 8px" }}>{p.name}</span>)}
+          {people.map((p) => (
+            <button key={p.id} title={p.id === session.doc.clientID ? "You" : `Go to ${p.name}`} disabled={p.id === session.doc.clientID}
+              style={{ background: p.colour, color: "#fff", borderRadius: 12, padding: "0 8px", border: 0 }}
+              onClick={() => { const c = session.provider.awareness?.getStates().get(p.id)?.cursor; if (c) apiRef.current?.centreOn(c); }}>
+              {p.name}
+            </button>
+          ))}
         </span>
       </header>
       <Toolbar tool={tool} onChange={setTool} disabled={readOnly} />
-      <Canvas selectionRef={selectionRef} board={session.board} tool={tool} readOnly={readOnly} awareness={session.provider.awareness ?? undefined} onToolDone={() => setTool("select")} />
+      <FormatBar board={session.board} selection={selected} readOnly={readOnly} api={apiRef} />
+      <Canvas apiRef={apiRef} onSelect={setSelected} board={session.board} tool={tool} readOnly={readOnly} awareness={session.provider.awareness ?? undefined} onToolDone={() => setTool("select")} />
       <Banner classification={meta.classification} />
       {sharing && <ShareDialog boardId={id} onClose={() => setSharing(false)} />}
     </div>

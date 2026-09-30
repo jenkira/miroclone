@@ -1,20 +1,30 @@
 import { z } from "zod";
-import { boardObjectSchema, MAX_OBJECTS_PER_BOARD, type BoardObject } from "./objects.js";
+import { boardObjectSchema, isSafeLink, MAX_OBJECTS_PER_BOARD, type BoardObject } from "./objects.js";
+import { listLines } from "./text.js";
 import { findClassification, type Classification } from "./classification.js";
 
 const esc = (s: string) =>
   s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
-const plain = (html: string) => html.replace(/<[^>]*>/g, "");
 /** Colours come from user data, so only accept hex values in exported markup. */
 const colour = (c: string, fallback: string) => (/^#[0-9a-fA-F]{3,8}$/.test(c) ? c : fallback);
 
 export interface Bounds { x: number; y: number; width: number; height: number }
 
+/** The box around an object after rotation about its centre. */
+export function rotatedExtent(o: { x: number; y: number; width: number; height: number; rotation: number }): Bounds {
+  if (!o.rotation) return { x: o.x, y: o.y, width: o.width, height: o.height };
+  const a = (o.rotation * Math.PI) / 180;
+  const cos = Math.abs(Math.cos(a)), sin = Math.abs(Math.sin(a));
+  const w = o.width * cos + o.height * sin, h = o.width * sin + o.height * cos;
+  return { x: o.x + o.width / 2 - w / 2, y: o.y + o.height / 2 - h / 2, width: w, height: h };
+}
+
+/** The box around the given objects, including rotation. Connectors follow their objects, so they add nothing. */
 export function boundsOf(objs: readonly BoardObject[], pad = 40): Bounds {
-  const visible = objs.filter((o) => o.type !== "connector");
-  if (!visible.length) return { x: 0, y: 0, width: 400, height: 300 };
-  const x = Math.min(...visible.map((o) => o.x)), y = Math.min(...visible.map((o) => o.y));
-  const r = Math.max(...visible.map((o) => o.x + o.width)), b = Math.max(...visible.map((o) => o.y + o.height));
+  const boxes = objs.filter((o) => o.type !== "connector").map(rotatedExtent);
+  if (!boxes.length) return { x: 0, y: 0, width: 400, height: 300 };
+  const x = Math.min(...boxes.map((b) => b.x)), y = Math.min(...boxes.map((b) => b.y));
+  const r = Math.max(...boxes.map((b) => b.x + b.width)), b = Math.max(...boxes.map((b) => b.y + b.height));
   return { x: x - pad, y: y - pad, width: r - x + pad * 2, height: b - y + pad * 2 };
 }
 
@@ -34,8 +44,16 @@ function shapeMarkup(o: BoardObject, byId: Map<string, BoardObject>): string {
         : `<rect x="${o.x}" y="${o.y}" width="${o.width}" height="${o.height}" rx="${o.kind === "rounded" ? 12 : 0}" ${a}/>`;
       return body + t(o.text);
     }
-    case "text":
-      return t(plain(o.html));
+    case "text": {
+      const lines = listLines(o.text, o.list);
+      const anchor = o.align === "center" ? "middle" : o.align === "right" ? "end" : "start";
+      const x = o.align === "center" ? o.x + o.width / 2 : o.align === "right" ? o.x + o.width - 8 : o.x + 8;
+      const deco = o.underline || o.link ? ' text-decoration="underline"' : "";
+      const fill = o.link ? "#1565c0" : colour(o.color, "#1a1a1a");
+      const spans = lines.map((l, i) => `<tspan x="${x}" dy="${i === 0 ? 0 : o.size * 1.25}">${esc(l)}</tspan>`).join("");
+      const text = `<text x="${x}" y="${o.y + o.size + 4}" font-size="${o.size}" font-family="sans-serif" font-weight="${o.bold ? 700 : 400}" font-style="${o.italic ? "italic" : "normal"}" text-anchor="${anchor}" fill="${fill}"${deco}>${spans}</text>`;
+      return o.link && isSafeLink(o.link) ? `<a href="${esc(o.link)}">${text}</a>` : text;
+    }
     case "stroke": {
       const pts: string[] = [];
       for (let i = 0; i + 1 < o.points.length; i += 2) pts.push(`${o.x + o.points[i]!},${o.y + o.points[i + 1]!}`);
@@ -66,7 +84,11 @@ export function exportSvg(
   const bar = 28;
   const b = opts.bounds ?? boundsOf(objs);
   const byId = new Map(objs.map((o) => [o.id, o]));
-  const body = [...objs].sort((p, q) => (p.index < q.index ? -1 : 1)).map((o) => shapeMarkup(o, byId)).join("");
+  const rotated = (o: BoardObject) => {
+    const m = shapeMarkup(o, byId);
+    return o.rotation && o.type !== "connector" ? `<g transform="rotate(${Number(o.rotation)} ${o.x + o.width / 2} ${o.y + o.height / 2})">${m}</g>` : m;
+  };
+  const body = [...objs].sort((p, q) => (p.index < q.index ? -1 : 1)).map(rotated).join("");
   const banner = (y: number) =>
     `<rect x="${b.x}" y="${y}" width="${b.width}" height="${bar}" fill="${colour(c.colour, "#000")}"/>` +
     `<text x="${b.x + b.width / 2}" y="${y + 19}" text-anchor="middle" font-size="16" font-weight="700" font-family="sans-serif" fill="#fff">${esc(c.label)}</text>`;

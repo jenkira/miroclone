@@ -43,10 +43,25 @@ export const shapeSchema = z.object({
   text: z.string().default(""),
 });
 
+/** Links must be web or mail links. Other schemes, such as `javascript:`, never reach the page. */
+export const isSafeLink = (v: string) => v.length <= 2048 && /^(https?:\/\/|mailto:)/i.test(v);
+
+/**
+ * Free text (CNV-4). Formatting applies to the whole object, and the content is plain text,
+ * so no HTML is stored or rendered.
+ */
 export const textSchema = z.object({
   ...base,
   type: z.literal("text"),
-  html: z.string().default(""),
+  text: z.string().default(""),
+  bold: z.boolean().default(false),
+  italic: z.boolean().default(false),
+  underline: z.boolean().default(false),
+  size: z.number().min(8).max(200).default(18),
+  color: z.string().default("#1a1a1a"),
+  align: z.enum(["left", "center", "right"]).default("left"),
+  list: z.enum(["none", "bullet", "number"]).default("none"),
+  link: z.string().refine(isSafeLink, "Links must start with http://, https://, or mailto:").optional(),
 });
 
 export const strokeSchema = z.object({

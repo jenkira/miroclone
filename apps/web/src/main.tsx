@@ -16,10 +16,9 @@ function useHash() {
 function App() {
   const hash = useHash();
   const [me, setMe] = useState<Me | null | undefined>(undefined);
-  useEffect(() => { api.me().then(setMe).catch(() => setMe(null)); }, []);
-
   // Local boards need no sign-in. They exist for development and performance checks.
   const local = /^#\/local(?:\/(\d+))?$/.exec(hash);
+  useEffect(() => { if (!local) api.me().then(setMe).catch(() => setMe(null)); }, [!!local]);
   if (local) return <Local objects={Number(local[1] ?? 0)} />;
 
   if (me === undefined) return <p>Loading…</p>;

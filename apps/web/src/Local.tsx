@@ -2,7 +2,8 @@ import { useMemo, useRef, useState } from "react";
 import * as Y from "yjs";
 import { Board } from "@miroclone/shared";
 import { Banner } from "./Banner.js";
-import { Canvas } from "./Canvas.js";
+import { Canvas, type CanvasApi } from "./Canvas.js";
+import { FormatBar } from "./FormatBar.js";
 import { ExportMenu } from "./ExportMenu.js";
 import { Toolbar } from "./Toolbar.js";
 import type { Tool } from "./tools.js";
@@ -10,7 +11,8 @@ import type { Tool } from "./tools.js";
 /** Local-only board for development and the performance prototype. Nothing syncs or persists. */
 export function Local({ objects }: { objects: number }) {
   const [tool, setTool] = useState<Tool>("select");
-  const selectionRef = useRef<() => string[]>(() => []);
+  const apiRef = useRef<CanvasApi | null>(null);
+  const [selected, setSelected] = useState<string[]>([]);
   const board = useMemo(() => {
     const b = new Board(new Y.Doc());
     b.doc.transact(() => {
@@ -28,8 +30,9 @@ export function Local({ objects }: { objects: number }) {
     <div style={{ display: "flex", flexDirection: "column", height: "100vh" }}>
       <Banner classification="OFFICIAL" />
       <Toolbar tool={tool} onChange={setTool} disabled={false} />
-      <ExportMenu board={board} title="Local board" classification="OFFICIAL" selection={() => selectionRef.current()} authorise={async () => {}} />
-      <Canvas selectionRef={selectionRef} board={board} tool={tool} readOnly={false} onToolDone={() => setTool("select")} />
+      <FormatBar board={board} selection={selected} readOnly={false} api={apiRef} />
+      <ExportMenu board={board} title="Local board" classification="OFFICIAL" selection={() => apiRef.current?.selection() ?? []} authorise={async () => {}} />
+      <Canvas apiRef={apiRef} onSelect={setSelected} board={board} tool={tool} readOnly={false} onToolDone={() => setTool("select")} />
       <Banner classification="OFFICIAL" />
     </div>
   );

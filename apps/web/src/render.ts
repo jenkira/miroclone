@@ -1,9 +1,52 @@
-import { Container, Graphics, Text } from "pixi.js";
+import { CanvasTextMetrics, Container, Graphics, Text, TextStyle } from "pixi.js";
 import type * as Y from "yjs";
-import { boardObjectSchema, type Board, type BoardObject } from "@miroclone/shared";
+import { boardObjectSchema, isSafeLink, listLines, type Board, type BoardObject } from "@miroclone/shared";
+import { handlePositions } from "./geometry.js";
 
-const plain = (html: string) => html.replace(/<[^>]*>/g, "");
 const hex = (c: string) => Number.parseInt(c.replace("#", ""), 16);
+
+/** Picks the largest font size, from 28 down to 10, at which the text fits the box (CNV-2). */
+export function fitFontSize(text: string, width: number, height: number): number {
+  for (let size = 28; size > 10; size -= 2) {
+    const style = new TextStyle({ fontSize: size, wordWrap: true, wordWrapWidth: width });
+    if (CanvasTextMetrics.measureText(text, style).height <= height) return size;
+  }
+  return 10;
+}
+
+/** Height a text object needs for its content, so it never overflows its box. */
+export function textHeight(o: Extract<BoardObject, { type: "text" }>): number {
+  const style = new TextStyle({ fontSize: o.size, fontWeight: o.bold ? "700" : "400", fontStyle: o.italic ? "italic" : "normal", wordWrap: true, wordWrapWidth: o.width - 16 });
+  const content = listLines(o.text, o.list).join("\n") || " ";
+  return Math.ceil(CanvasTextMetrics.measureText(content, style).height) + 16;
+}
+
+function drawFormattedText(c: Container, o: Extract<BoardObject, { type: "text" }>): Text | undefined {
+  const linked = !!o.link && isSafeLink(o.link);
+  const content = listLines(o.text, o.list).join("\n");
+  if (!content) return undefined;
+  const style = new TextStyle({
+    fontSize: o.size, fontWeight: o.bold ? "700" : "400", fontStyle: o.italic ? "italic" : "normal",
+    fill: linked ? 0x1565c0 : hex(o.color), align: o.align, wordWrap: true, wordWrapWidth: o.width - 16,
+  });
+  const t = new Text({ text: content, style });
+  const x = o.align === "center" ? (o.width - t.width) / 2 : o.align === "right" ? o.width - t.width - 8 : 8;
+  t.position.set(x, 8);
+  c.addChild(t);
+  if (o.underline || linked) {
+    const m = CanvasTextMetrics.measureText(content, style);
+    const g = new Graphics();
+    m.lines.forEach((line, i) => {
+      const w = m.lineWidths[i] ?? 0;
+      const lx = o.align === "center" ? (o.width - w) / 2 : o.align === "right" ? o.width - w - 8 : 8;
+      const y = 8 + (i + 1) * m.lineHeight - 2;
+      if (line) g.moveTo(lx, y).lineTo(lx + w, y);
+    });
+    g.stroke({ width: 1, color: linked ? 0x1565c0 : hex(o.color) });
+    c.addChild(g);
+  }
+  return t;
+}
 
 export interface Drawn { node: Container; text?: Text }
 
@@ -11,13 +54,17 @@ export interface Drawn { node: Container; text?: Text }
 export function drawObject(o: BoardObject, board: Board): Drawn {
   const c = new Container();
   let textNode: Text | undefined;
-  c.position.set(o.x, o.y);
+  // Rotate about the centre, so the object turns in place (CNV-9).
+  c.pivot.set(o.width / 2, o.height / 2);
+  c.position.set(o.x + o.width / 2, o.y + o.height / 2);
   c.rotation = (o.rotation * Math.PI) / 180;
   const g = new Graphics();
   c.addChild(g);
 
-  const label = (text: string, w: number, size = 16) => {
+  const label = (text: string, w: number, h: number, autoSize = false) => {
     if (!text) return;
+    let size = 16;
+    if (autoSize) size = fitFontSize(text, w - 16, h - 16);
     const t = new Text({ text, style: { fontSize: size, wordWrap: true, wordWrapWidth: w - 16, fill: 0x1a1a1a } });
     t.position.set(8, 8);
     c.addChild(t);
@@ -27,7 +74,7 @@ export function drawObject(o: BoardObject, board: Board): Drawn {
   switch (o.type) {
     case "sticky":
       g.rect(0, 0, o.width, o.height).fill(hex(o.color)).stroke({ width: 1, color: 0xbdbdbd });
-      label(o.text, o.width);
+      label(o.text, o.width, o.height, true);
       break;
     case "shape": {
       const { width: w, height: h } = o;
@@ -37,11 +84,11 @@ export function drawObject(o: BoardObject, board: Board): Drawn {
       else if (o.kind === "triangle") g.poly([w / 2, 0, w, h, 0, h]);
       else g.poly([w / 2, 0, w, h / 2, w / 2, h, 0, h / 2]);
       g.fill(hex(o.fill)).stroke({ width: 2, color: hex(o.stroke) });
-      label(o.text, w);
+      label(o.text, w, h);
       break;
     }
     case "text":
-      label(plain(o.html), o.width);
+      textNode = drawFormattedText(c, o);
       break;
     case "stroke": {
       const pts = o.points;
@@ -65,6 +112,7 @@ export function drawObject(o: BoardObject, board: Board): Drawn {
       break;
     case "connector": {
       const ends = board.connectorEnds(o.id);
+      c.pivot.set(0, 0);
       c.position.set(0, 0);
       c.rotation = 0;
       if (ends) g.moveTo(ends.from.x, ends.from.y).lineTo(ends.to.x, ends.to.y).stroke({ width: 2, color: 0x1a1a1a });
@@ -96,7 +144,12 @@ export class Scene {
   private put(o: BoardObject) {
     this.nodes.get(o.id)?.node.destroy({ children: true });
     const d = drawObject(o, this.board);
-    this.nodes.set(o.id, { ...d, box: { x: o.x, y: o.y, width: o.width, height: o.height }, connector: o.type === "connector" });
+    // A rotated object can reach past its unrotated box, so cull by the circle around it.
+    const r = o.rotation ? Math.hypot(o.width, o.height) / 2 : 0;
+    const box = r
+      ? { x: o.x + o.width / 2 - r, y: o.y + o.height / 2 - r, width: r * 2, height: r * 2 }
+      : { x: o.x, y: o.y, width: o.width, height: o.height };
+    this.nodes.set(o.id, { ...d, box, connector: o.type === "connector" });
     this.layer.addChild(d.node);
   }
 
@@ -139,8 +192,20 @@ export class Scene {
   get size() { return this.nodes.size; }
 }
 
-export function drawSelection(o: BoardObject): Graphics {
-  return new Graphics().rect(o.x - 3, o.y - 3, o.width + 6, o.height + 6).stroke({ width: 2, color: 0x1976d2 });
+/** Draws the selection outline. A single resizable object also gets corner and rotation handles (CNV-9). */
+export function drawSelection(o: BoardObject, opts: { handles?: boolean; zoom?: number } = {}): Graphics {
+  const zoom = opts.zoom ?? 1;
+  const g = new Graphics();
+  const hp = handlePositions(o, zoom);
+  g.poly([hp.nw.x, hp.nw.y, hp.ne.x, hp.ne.y, hp.se.x, hp.se.y, hp.sw.x, hp.sw.y]).stroke({ width: 2 / zoom, color: 0x1976d2 });
+  if (opts.handles) {
+    const k = 4 / zoom;
+    const top = { x: (hp.nw.x + hp.ne.x) / 2, y: (hp.nw.y + hp.ne.y) / 2 };
+    g.moveTo(top.x, top.y).lineTo(hp.rotate.x, hp.rotate.y).stroke({ width: 1 / zoom, color: 0x1976d2 });
+    for (const h of ["nw", "ne", "se", "sw"] as const) g.rect(hp[h].x - k, hp[h].y - k, k * 2, k * 2).fill(0xffffff).stroke({ width: 1.5 / zoom, color: 0x1976d2 });
+    g.circle(hp.rotate.x, hp.rotate.y, k * 1.2).fill(0xffffff).stroke({ width: 1.5 / zoom, color: 0x1976d2 });
+  }
+  return g;
 }
 
 export function drawCursor(x: number, y: number, colour: string, name: string): Container {

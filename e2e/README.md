@@ -30,3 +30,10 @@ To run the test, you need PostgreSQL 16, Redis 7, and Chromium. Follow these ste
    Set `CHROMIUM_PATH` if Chromium isn't at `/opt/pw-browsers/chromium`.
 
 The fake identity provider and `INSECURE_COOKIES` are for local use only.
+
+## Canvas test
+
+The script `canvas.mjs` needs only the web dev server. It opens the local board at `#/local` and checks
+resize, rotate, rotated hit testing, undo, sticky auto-size, text formatting, link safety, and
+zoom to fit. Run `pnpm --filter @miroclone/web exec vite --port 5199 --host 127.0.0.1`, then run
+`node e2e/canvas.mjs`.

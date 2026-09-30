@@ -26,7 +26,7 @@ export function objectForGesture(
     case "sticky":
       return { type: "sticky", x: start.x - 80, y: start.y - 80, width: 160, height: 160, text: "" };
     case "text":
-      return { type: "text", x: start.x, y: start.y, width: 200, height: 40, html: "" };
+      return { type: "text", x: start.x, y: start.y, width: 200, height: 40, text: "" };
     case "rectangle":
     case "ellipse":
     case "diamond": {
