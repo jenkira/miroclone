@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { defaultClassifications } from "@miroclone/shared";
-import { api, type BoardSummary, type Me, type SearchHit } from "./api.js";
+import { api, type BoardSummary, type Me, type OrgTemplate, type SearchHit, type TemplateInfo } from "./api.js";
 import { snippetParts } from "./versions.js";
 import { Banner } from "./Banner.js";
 import { Notifications } from "./Notifications.js";
@@ -13,6 +13,10 @@ export function Dashboard({ me }: { me: Me }) {
   const [boards, setBoards] = useState<BoardSummary[]>([]);
   const [title, setTitle] = useState("");
   const [classification, setClassification] = useState("OFFICIAL");
+  const [templates, setTemplates] = useState<{ builtin: TemplateInfo[]; organisation: OrgTemplate[] }>({ builtin: [], organisation: [] });
+  const [template, setTemplate] = useState("");
+  const [createError, setCreateError] = useState("");
+  useEffect(() => { api.templates().then(setTemplates).catch(() => {}); }, []);
   const [query, setQuery] = useState("");
   const [hits, setHits] = useState<SearchHit[] | null>(null);
   // Wait for a pause in typing before searching.
@@ -29,14 +33,26 @@ export function Dashboard({ me }: { me: Me }) {
       <Banner classification={classification} />
       <h1>Boards</h1>
       <p>Signed in as {me.name}. <Notifications /> <button onClick={async () => { await clearOfflineCache(); await api.logout(); location.reload(); }}>Sign out</button></p>
-      <form onSubmit={async (e) => { e.preventDefault(); const { id } = await api.createBoard(title, classification); location.hash = `#/board/${id}`; }}>
+      <form onSubmit={async (e) => {
+        e.preventDefault(); setCreateError("");
+        try { const { id } = await api.createBoard(title, classification, template); location.hash = `#/board/${id}`; }
+        catch { setCreateError("The board couldn't be created. A template from a higher classification needs a board at that level or above."); }
+      }}>
         <label>Title <input value={title} onChange={(e) => setTitle(e.target.value)} required /></label>{" "}
         <label>Classification{" "}
           <select value={classification} onChange={(e) => setClassification(e.target.value)}>
             {defaultClassifications.map((c) => <option key={c.key} value={c.key}>{c.label}</option>)}
           </select>
         </label>{" "}
+        <label>Start from{" "}
+          <select value={template} onChange={(e) => setTemplate(e.target.value)}>
+            <option value="">Blank board</option>
+            <optgroup label="Built-in templates">{templates.builtin.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}</optgroup>
+            {templates.organisation.length > 0 && <optgroup label="Organisation templates">{templates.organisation.map((t) => <option key={t.id} value={t.id}>{t.name} ({t.classification})</option>)}</optgroup>}
+          </select>
+        </label>{" "}
         <button type="submit">Create board</button>
+        <p role="alert">{createError}</p>
       </form>
       <p>
         <label>Import a board file{" "}

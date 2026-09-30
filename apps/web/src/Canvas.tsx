@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Application, Container, Graphics } from "pixi.js";
+import { Application, Container, Graphics, Text } from "pixi.js";
 import type * as Y from "yjs";
 import type { Awareness } from "y-protocols/awareness";
 import { isSafeLink, Board, type BoardObject } from "@miroclone/shared";
@@ -22,7 +22,17 @@ export interface CanvasApi {
   centreOn(p: Point): void;
   /** The world point at the middle of the screen. */
   viewCentre(): Point;
+  /** Zooms to show a rectangle, as when presenting a frame (WSH-5). */
+  showRect(r: { x: number; y: number; width: number; height: number }): void;
+  viewport(): Viewport;
+  /** Sets the viewport, as when following another person (COL-6). It isn't reported as the user's own move. */
+  setViewport(v: Viewport): void;
+  /** Converts a world point to a point on screen, relative to the page. */
+  toScreen(p: Point): Point;
 }
+
+/** A small count drawn on an object, such as a vote tally (WSH-4). */
+export interface Badge { objectId: string; text: string; colour?: number }
 
 export interface CanvasProps {
   board: Board;
@@ -42,6 +52,12 @@ export interface CanvasProps {
   onComment?: (at: { x: number; y: number; objectId?: string }) => void;
   /** Commenters can use the comment tool even when the board is read-only for them. */
   canComment?: boolean;
+  badges?: Badge[];
+  /** Called when the Vote tool clicks an object. `remove` is set when Alt is held. */
+  onVote?: (objectId: string, remove: boolean) => void;
+  canVote?: boolean;
+  /** Called when the view changes. `source` is "user" for the user's own pan and zoom. */
+  onViewChange?: (v: Viewport, source: "user" | "api") => void;
 }
 
 /** Clipboard shared by every board in this tab, so paste works between boards (CNV-11). It clears on reload and sign-out (COL-10). */
@@ -71,7 +87,7 @@ type Gesture =
 
 const resizable = (o: BoardObject) => o.type !== "connector" && o.type !== "stroke";
 
-export function Canvas({ board, tool, readOnly, awareness, onToolDone, apiRef, onSelect, onFiles, pins, selectedPin, onPinClick, onComment, canComment }: CanvasProps) {
+export function Canvas({ board, tool, readOnly, awareness, onToolDone, apiRef, onSelect, onFiles, pins, selectedPin, onPinClick, onComment, canComment, badges, onVote, canVote, onViewChange }: CanvasProps) {
   const host = useRef<HTMLDivElement>(null);
   const toolRef = useRef(tool);
   const roRef = useRef(readOnly);
@@ -80,6 +96,9 @@ export function Canvas({ board, tool, readOnly, awareness, onToolDone, apiRef, o
   const pinsRef = useRef<Pin[]>([]);
   const pinCb = useRef({ onPinClick, onComment, canComment, selectedPin });
   const drawPinsRef = useRef<() => void>(() => {});
+  const badgesRef = useRef<Badge[]>([]);
+  const voteCb = useRef({ onVote, canVote, onViewChange });
+  const drawBadgesRef = useRef<() => void>(() => {});
   const selection = useRef<string[]>([]);
   const view = useRef<Viewport>({ x: 0, y: 0, zoom: 1 });
   const redrawRef = useRef<() => void>(() => {});
@@ -91,6 +110,8 @@ export function Canvas({ board, tool, readOnly, awareness, onToolDone, apiRef, o
   onFilesRef.current = onFiles;
   pinsRef.current = pins ?? [];
   pinCb.current = { onPinClick, onComment, canComment, selectedPin };
+  badgesRef.current = badges ?? [];
+  voteCb.current = { onVote, canVote, onViewChange };
   editingRef.current = editing;
 
   useEffect(() => {
@@ -100,6 +121,7 @@ export function Canvas({ board, tool, readOnly, awareness, onToolDone, apiRef, o
     const objectsLayer = new Container();
     const overlay = new Container();
     const pinLayer = new Container();
+    const badgeLayer = new Container();
     const cursors = new Container();
     const preview = new Container();
     const scene = new Scene(objectsLayer, board);
@@ -134,19 +156,39 @@ export function Canvas({ board, tool, readOnly, awareness, onToolDone, apiRef, o
       }
     };
     drawPinsRef.current = drawPins;
+    /** Badges sit at each object's top-left corner and keep a constant size on screen. */
+    const drawBadges = () => {
+      if (!ready) return;
+      badgeLayer.removeChildren().forEach((c) => c.destroy({ children: true }));
+      const k = 1 / view.current.zoom;
+      for (const b of badgesRef.current) {
+        const o = board.get(b.objectId);
+        if (!o) continue;
+        const t = new Text({ text: b.text, style: { fontSize: 13 * k, fill: 0xffffff, fontWeight: "700" } });
+        const r = 12 * k, w = Math.max(r * 2, t.width + 10 * k);
+        const g = new Graphics().roundRect(o.x - w / 2, o.y - r, w, r * 2, r).fill(b.colour ?? 0x1976d2).stroke({ width: 1.5 * k, color: 0xffffff });
+        t.position.set(o.x - t.width / 2, o.y - t.height / 2);
+        badgeLayer.addChild(g, t);
+      }
+    };
+    drawBadgesRef.current = drawBadges;
+    let source: "user" | "api" = "user";
     const apply = () => {
       world.position.set(view.current.x, view.current.y);
       world.scale.set(view.current.zoom);
       cull();
       drawSelections();
       drawPins();
+      drawBadges();
+      voteCb.current.onViewChange?.({ ...view.current }, source);
+      source = "user";
     };
     const setSel = (ids: string[]) => {
       selection.current = ids;
       onSelectRef.current?.(ids);
       redraw();
     };
-    const onObjects = (event: Y.YMapEvent<BoardObject>) => { if (!ready) return; scene.apply(event); cull(); drawSelections(); };
+    const onObjects = (event: Y.YMapEvent<BoardObject>) => { if (!ready) return; scene.apply(event); cull(); drawSelections(); drawBadges(); };
 
     const showRect = (r: { x: number; y: number; width: number; height: number }) => {
       view.current = fitRect(r, el.clientWidth, el.clientHeight);
@@ -158,6 +200,10 @@ export function Canvas({ board, tool, readOnly, awareness, onToolDone, apiRef, o
         select: setSel,
         fit: () => showRect(boundsOf(board.list(), 0)),
         fitSelection: () => { const objs = selection.current.map((id) => board.get(id)).filter(Boolean) as BoardObject[]; if (objs.length) showRect(boundsOf(objs, 0)); },
+        showRect: (r) => { source = "api"; showRect(r); },
+        viewport: () => ({ ...view.current }),
+        setViewport: (v) => { view.current = { ...v }; source = "api"; apply(); },
+        toScreen: (p) => { const b = el.getBoundingClientRect(); return { x: b.left + p.x * view.current.zoom + view.current.x, y: b.top + p.y * view.current.zoom + view.current.y }; },
         viewCentre: () => screenToWorld(view.current, el.clientWidth / 2, el.clientHeight / 2),
         centreOn: (p) => { view.current = { ...view.current, x: el.clientWidth / 2 - p.x * view.current.zoom, y: el.clientHeight / 2 - p.y * view.current.zoom }; apply(); },
       };
@@ -176,7 +222,7 @@ export function Canvas({ board, tool, readOnly, awareness, onToolDone, apiRef, o
       await app.init({ resizeTo: el, background: "#f5f5f5", antialias: true });
       if (disposed) { app.destroy(); return; }
       el.appendChild(app.canvas);
-      world.addChild(objectsLayer, overlay, pinLayer, cursors, preview);
+      world.addChild(objectsLayer, overlay, badgeLayer, pinLayer, cursors, preview);
       app.stage.addChild(world);
       ready = true;
       // The container changes size when panels open, and Pixi only follows window resizes by itself.
@@ -186,6 +232,7 @@ export function Canvas({ board, tool, readOnly, awareness, onToolDone, apiRef, o
       cull();
       drawSelections();
       drawPins();
+      drawBadges();
     })();
 
     board.objects.observe(onObjects);
@@ -205,6 +252,13 @@ export function Canvas({ board, tool, readOnly, awareness, onToolDone, apiRef, o
       const t = toolRef.current;
       const ro = roRef.current;
       if (e.button === 1 || e.button === 2) { gesture = { kind: "pan", last: { x: e.clientX, y: e.clientY } }; return; }
+      if (t === "vote") {
+        if (voteCb.current.canVote) {
+          const hit = hitTest(board.list(), p);
+          if (hit) voteCb.current.onVote?.(hit.id, e.altKey);
+        }
+        return;
+      }
       if (t === "comment") {
         if (pinCb.current.canComment) {
           const pin = pinAt(pinsRef.current, p, view.current.zoom);
@@ -397,6 +451,7 @@ export function Canvas({ board, tool, readOnly, awareness, onToolDone, apiRef, o
 
   // Redraw the pins when they change.
   useEffect(() => { drawPinsRef.current(); }, [pins, selectedPin]);
+  useEffect(() => { drawBadgesRef.current(); }, [badges]);
 
   const commit = (text: string) => {
     if (!editing) return;

@@ -14,6 +14,11 @@ import { pinsFor } from "./pins.js";
 import { cacheBoard, clearOfflineCache } from "./offline.js";
 import { ACCEPTED, MAX_BYTES, sizeFor, uploadMessage, useBoardImages } from "./images.js";
 import { ShareDialog } from "./ShareDialog.js";
+import { contentOfSelection } from "./selection.js";
+import { useVoting } from "./useVoting.js";
+import { useWorkshop } from "./useWorkshop.js";
+import { VotePanel } from "./VotePanel.js";
+import { WorkshopBar } from "./WorkshopBar.js";
 import { Toolbar } from "./Toolbar.js";
 import type { Tool } from "./tools.js";
 
@@ -30,7 +35,7 @@ export function BoardView({ id, me }: { id: string; me: Me }) {
   const [notice, setNotice] = useState("");
   const [threads, setThreads] = useState<Thread[]>([]);
   // One side panel at a time.
-  const [panel, setPanel] = useState<"comments" | "history" | null>(null);
+  const [panel, setPanel] = useState<"comments" | "history" | "voting" | null>(null);
   const showComments = panel === "comments";
   const setShowComments = (on: boolean) => setPanel(on ? "comments" : null);
   const [selectedThread, setSelectedThread] = useState<string>();
@@ -78,11 +83,31 @@ export function BoardView({ id, me }: { id: string; me: Me }) {
     return () => { session.board.objects.unobserve(onObjs); aw.off("change", onAw); provider.off("authenticationFailed", onAuthFailed); stopCache(); provider.destroy(); socket.destroy(); };
   }, [session, id]);
 
+  // These hooks run before the early returns below, so they always run in the same order.
+  const facilitator = meta?.role === "owner" || meta?.role === "editor";
+  const w = useWorkshop({ doc: session.doc, board: session.board, awareness: session.provider.awareness ?? undefined, me, canFacilitate: !!facilitator, apiRef });
+  const voting = useVoting(id);
+  useEffect(() => { if (import.meta.env.DEV) Object.assign(window, { __apiRef: apiRef }); }, []);
+
   if (error) return <p role="alert">{error}</p>;
   if (!meta) return <p>Loading board…</p>;
   const readOnly = meta.role === "viewer" || meta.role === "commenter";
   const canComment = meta.role !== "viewer";
   const canModerate = meta.role === "owner" || meta.role === "editor";
+
+  /** Saves the selection, or the whole board, as a template for the organisation (WSH-2). */
+  const saveTemplate = async () => {
+    const sel = apiRef.current?.selection() ?? [];
+    const what = sel.length ? "the selected objects" : "this whole board";
+    const name = window.prompt(`Name the template. Everyone in the organisation can use ${what} as a starting point, at ${meta.classification} or higher.`);
+    if (!name?.trim()) return;
+    try {
+      await api.saveTemplate(id, name.trim(), sel.length ? contentOfSelection(session.board.list(), sel) : undefined);
+      setNotice(`Saved the template "${name.trim()}".`);
+    } catch (e) {
+      setNotice((e as { status?: number }).status === 403 ? "Only editors can save templates." : "The template couldn't be saved.");
+    }
+  };
   // Pins follow their objects, so they're recomputed when objects change.
   const pins = pinsFor(threads, (oid) => session.board.get(oid));
 
@@ -121,6 +146,8 @@ export function BoardView({ id, me }: { id: string; me: Me }) {
         {meta.role === "owner" && <button onClick={() => setSharing(true)}>Share</button>}
         <ExportMenu board={session.board} title={meta.title} classification={meta.classification} selection={() => apiRef.current?.selection() ?? []}
           authorise={(format, scope) => api.recordExport(id, format, scope) as Promise<void>} loadImage={(fileId) => api.fetchFile(id, fileId)} />
+        {canModerate && <button onClick={saveTemplate}>Save as template</button>}
+        <button aria-pressed={panel === "voting"} onClick={() => setPanel(panel === "voting" ? null : "voting")}>Voting{voting.open ? " (open)" : ""}</button>
         {!readOnly && <button aria-pressed={panel === "history"} onClick={() => setPanel(panel === "history" ? null : "history")}>History</button>}
         <button aria-pressed={showComments} onClick={() => setShowComments(!showComments)}>Comments{threads.filter((t) => !t.resolved).length ? ` (${threads.filter((t) => !t.resolved).length})` : ""}</button>
         <Notifications />
@@ -132,19 +159,27 @@ export function BoardView({ id, me }: { id: string; me: Me }) {
               {p.name}
             </button>
           ))}
+          {people.filter((p) => p.id !== session.doc.clientID).map((p) => (
+            <button key={`f${p.id}`} aria-pressed={w.followId === p.id} title={`Follow ${p.name}'s view`} onClick={() => w.setFollowId(w.followId === p.id ? null : p.id)}>
+              {w.followId === p.id ? "Following" : "Follow"} {p.name.split(" ")[0]}
+            </button>
+          ))}
         </span>
       </header>
       {notice && <p role="alert" style={{ margin: 0, padding: "2px 8px", background: "#fff3e0" }}>{notice}</p>}
-      <Toolbar tool={tool} onChange={(t) => { setTool(t); if (t === "comment") setShowComments(true); }} disabled={readOnly} canComment={canComment} />
+      <Toolbar tool={tool} onChange={(t) => { setTool(t); if (t === "comment") setShowComments(true); if (t === "vote") setPanel("voting"); }} disabled={readOnly} canComment={canComment} canVote={canComment} />
       <FormatBar board={session.board} selection={selected} readOnly={readOnly} api={apiRef} />
+      <WorkshopBar w={w} />
       <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
         <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
           <Canvas apiRef={apiRef} onSelect={setSelected} onFiles={addImages} board={session.board} tool={tool} readOnly={readOnly} awareness={session.provider.awareness ?? undefined}
             onToolDone={() => setTool("select")}
             pins={pins} selectedPin={selectedThread} canComment={canComment}
+            badges={voting.badges} canVote={canComment && voting.open} onVote={(oid, remove) => void voting.cast(oid, remove)} onViewChange={w.onViewChange}
             onPinClick={(tid) => { setSelectedThread(tid); setShowComments(true); }}
             onComment={(at) => { setPending(at); setShowComments(true); }} />
         </div>
+        {panel === "voting" && <VotePanel v={voting} board={session.board} canFacilitate={!!facilitator} canVote={canComment} />}
         {panel === "history" && !readOnly && <HistoryPanel boardId={id} board={session.board} canDelete={meta.role === "owner"} />}
         {showComments && (
           <CommentsPanel boardId={id} threads={threads} me={me.id} canComment={canComment} canModerate={canModerate}

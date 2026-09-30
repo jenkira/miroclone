@@ -67,3 +67,11 @@ two workers from `services/worker`: one for search indexing and one for automati
 8093 and 8094 first. A worker left over from an earlier run holds them. Set `WORKER_LOG_DIR` to a
 directory to keep each worker's output. The test gives each board a unique title, so boards from
 earlier runs don't affect it.
+
+## Workshop test
+
+The script `workshop.mjs` needs the full-stack setup. It checks built-in and organisation templates, the
+classification floor on templates, the shared timer with a browser whose clock is 9 seconds fast,
+presenting frames in reading order, following a person, bringing everyone to a view, and anonymous and
+named voting, including that an anonymous round never sends voter names. Organisation templates and
+boards persist, so each run uses its own names.

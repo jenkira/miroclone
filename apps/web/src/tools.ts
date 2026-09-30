@@ -1,7 +1,7 @@
 import type { BoardObject } from "@miroclone/shared";
 import { hitTest, normaliseRect, strokeFromPoints, type Point } from "./geometry.js";
 
-export const tools = ["select", "sticky", "rectangle", "ellipse", "diamond", "text", "pen", "highlighter", "eraser", "connector", "frame", "comment"] as const;
+export const tools = ["select", "sticky", "rectangle", "ellipse", "diamond", "text", "pen", "highlighter", "eraser", "connector", "frame", "comment", "vote"] as const;
 export type Tool = (typeof tools)[number];
 
 export type NewObject = Record<string, unknown> & { type: BoardObject["type"] };

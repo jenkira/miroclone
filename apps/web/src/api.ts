@@ -7,6 +7,13 @@ export interface Thread { id: string; anchor: Anchor | null; resolved: boolean; 
 export interface Notification { id: string; kind: "mention" | "reply"; boardId: string; boardTitle: string; classification: string; actorName: string; createdAt: string; read: boolean }
 export interface VersionInfo { id: string; kind: "auto" | "named"; name: string | null; objectCount: number; createdByName: string | null; createdAt: string; bytes: number }
 export interface SearchHit { id: string; title: string; classification: string; role: string; snippet: string }
+export interface TemplateInfo { id: string; name: string; description?: string }
+export interface OrgTemplate { id: string; name: string; classification: string; objectCount: number; createdByName: string; mine: boolean }
+export interface VoteState {
+  session: { id: string; limit: number; anonymous: boolean; state: "open" | "closed" } | null;
+  mine: string[]; remaining: number;
+  results: { objectId: string; count: number; voters?: string[] }[] | null;
+}
 export interface BoardSummary { id: string; title: string; classification: string; role: string; starred: boolean; updated_at: string }
 
 async function call<T>(method: string, url: string, body?: unknown): Promise<T> {
@@ -23,7 +30,7 @@ async function call<T>(method: string, url: string, body?: unknown): Promise<T> 
 export const api = {
   me: () => call<Me>("GET", "/api/me"),
   boards: (filter = "recent") => call<BoardSummary[]>("GET", `/api/boards?filter=${filter}`),
-  createBoard: (title: string, classification: string) => call<{ id: string }>("POST", "/api/boards", { title, classification }),
+  createBoard: (title: string, classification: string, template?: string) => call<{ id: string }>("POST", "/api/boards", { title, classification, template: template || undefined }),
   board: (id: string) => call<BoardSummary>("GET", `/api/boards/${id}`),
   deleteBoard: (id: string) => call<unknown>("DELETE", `/api/boards/${id}`),
   restoreBoard: (id: string) => call<unknown>("POST", `/api/boards/${id}/restore`),
@@ -55,6 +62,15 @@ export const api = {
   restoreVersion: (id: string, versionId: string) => call<{ state: string }>("POST", `/api/boards/${id}/versions/${versionId}/restore`),
   deleteVersion: (id: string, versionId: string) => call<unknown>("DELETE", `/api/boards/${id}/versions/${versionId}`),
   search: (q: string) => call<SearchHit[]>("GET", `/api/search?q=${encodeURIComponent(q)}`),
+  time: () => call<{ now: number }>("GET", "/api/time"),
+  templates: () => call<{ builtin: TemplateInfo[]; organisation: OrgTemplate[] }>("GET", "/api/templates"),
+  saveTemplate: (boardId: string, name: string, objectIds?: string[]) => call<{ id: string }>("POST", "/api/templates", { boardId, name, objectIds }),
+  deleteTemplate: (id: string) => call<unknown>("DELETE", `/api/templates/${id}`),
+  votes: (id: string) => call<VoteState>("GET", `/api/boards/${id}/votes`),
+  startVoting: (id: string, limit: number, anonymous: boolean) => call<VoteState>("POST", `/api/boards/${id}/votes/session`, { limit, anonymous }),
+  closeVoting: (id: string) => call<VoteState>("POST", `/api/boards/${id}/votes/close`),
+  castVote: (id: string, objectId: string) => call<VoteState>("POST", `/api/boards/${id}/votes`, { objectId }),
+  removeVote: (id: string, objectId: string) => call<VoteState>("DELETE", `/api/boards/${id}/votes`, { objectId }),
   recordExport: (id: string, format: string, scope = "board") => call<unknown>("POST", `/api/boards/${id}/exports`, { format, scope }),
   importBoard: (file: string, classification?: string) => call<{ id: string }>("POST", "/api/boards/import", { file, classification }),
   logout: () => call<unknown>("POST", "/auth/logout"),
