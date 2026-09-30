@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { defaultClassifications } from "@miroclone/shared";
-import { api, type BoardSummary, type Me } from "./api.js";
+import { api, type BoardSummary, type Me, type SearchHit } from "./api.js";
+import { snippetParts } from "./versions.js";
 import { Banner } from "./Banner.js";
 import { Notifications } from "./Notifications.js";
 import { clearOfflineCache } from "./offline.js";
@@ -12,6 +13,14 @@ export function Dashboard({ me }: { me: Me }) {
   const [boards, setBoards] = useState<BoardSummary[]>([]);
   const [title, setTitle] = useState("");
   const [classification, setClassification] = useState("OFFICIAL");
+  const [query, setQuery] = useState("");
+  const [hits, setHits] = useState<SearchHit[] | null>(null);
+  // Wait for a pause in typing before searching.
+  useEffect(() => {
+    if (query.trim().length < 2) { setHits(null); return; }
+    const t = window.setTimeout(() => { api.search(query).then(setHits).catch(() => setHits([])); }, 300);
+    return () => window.clearTimeout(t);
+  }, [query]);
   const load = () => api.boards(filter).then(setBoards);
   useEffect(() => { void load(); }, [filter]);
 
@@ -39,6 +48,23 @@ export function Dashboard({ me }: { me: Me }) {
           }} />
         </label>
       </p>
+      <p role="search">
+        <label>Search boards <input type="search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Titles and board text" /></label>
+      </p>
+      {hits && (
+        <section aria-label="Search results">
+          {hits.length === 0 ? <p>No boards match.</p> : (
+            <ul>
+              {hits.map((h) => (
+                <li key={h.id}>
+                  <a href={`#/board/${h.id}`}>{h.title}</a> <em>{h.classification}</em> ({h.role})<br />
+                  <small>{snippetParts(h.snippet).map((p, i) => p.match ? <mark key={i}>{p.text}</mark> : <span key={i}>{p.text}</span>)}</small>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      )}
       <nav aria-label="Board filters">{filters.map(([k, l]) => <button key={k} aria-pressed={filter === k} onClick={() => setFilter(k)}>{l}</button>)}</nav>
       <ul>
         {boards.map((b) => (

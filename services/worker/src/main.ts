@@ -1,6 +1,6 @@
 import { createServer } from "node:http";
 import pg from "pg";
-import { migrate, purgeExpiredBoards, S3ObjectStore } from "@miroclone/server-core";
+import { indexStaleBoards, migrate, pruneAutoVersions, purgeExpiredBoards, S3ObjectStore, snapshotChangedBoards } from "@miroclone/server-core";
 import { sendPendingEmails, type Mailer } from "./email.js";
 import { SmtpMailer } from "./smtp.js";
 
@@ -48,7 +48,7 @@ const appUrl = process.env.APP_URL;
 let running = true;
 const every = (name: string, ms: number, job: () => Promise<unknown>) => {
   const tick = async () => {
-    try { const r = await job(); if (r && JSON.stringify(r) !== JSON.stringify({ sent: 0, failed: 0, skipped: 0 })) log(name, r as Record<string, unknown>); }
+    try { const r = (await job()) as Record<string, number> | undefined; if (r && Object.values(r).some((n) => n > 0)) log(name, r); }
     catch (err) { console.error(JSON.stringify({ level: "error", msg: `${name} failed`, err: String(err) })); }
   };
   void tick();
@@ -58,6 +58,10 @@ const every = (name: string, ms: number, job: () => Promise<unknown>) => {
 const timers = [
   ...(mailer && appUrl ? [every("emails", 30_000, () => sendPendingEmails(db, mailer, appUrl))] : []),
   every("purge", 60 * 60 * 1000, () => purgeExpiredBoards(db, store)),
+  // New and changed boards reach search within seconds (BRD-4).
+  every("search-index", 10_000, async () => ({ indexed: await indexStaleBoards(db) })),
+  // Automatic versions (BRD-6): changed boards get one at most every 10 minutes, and old ones are pruned.
+  every("versions", 2 * 60 * 1000, async () => ({ snapshots: await snapshotChangedBoards(db), pruned: await pruneAutoVersions(db) })),
 ];
 
 // A small HTTP endpoint for the Kubernetes probes.

@@ -5,6 +5,8 @@ export interface Anchor { objectId?: string; x?: number; y?: number }
 export interface CommentRow { id: string; threadId: string; authorId: string; authorName: string; body: string; createdAt: string; editedAt: string | null }
 export interface Thread { id: string; anchor: Anchor | null; resolved: boolean; resolvedBy: string | null; comments: CommentRow[] }
 export interface Notification { id: string; kind: "mention" | "reply"; boardId: string; boardTitle: string; classification: string; actorName: string; createdAt: string; read: boolean }
+export interface VersionInfo { id: string; kind: "auto" | "named"; name: string | null; objectCount: number; createdByName: string | null; createdAt: string; bytes: number }
+export interface SearchHit { id: string; title: string; classification: string; role: string; snippet: string }
 export interface BoardSummary { id: string; title: string; classification: string; role: string; starred: boolean; updated_at: string }
 
 async function call<T>(method: string, url: string, body?: unknown): Promise<T> {
@@ -48,6 +50,11 @@ export const api = {
   deleteComment: (id: string, commentId: string) => call<unknown>("DELETE", `/api/boards/${id}/comments/${commentId}`),
   notifications: () => call<Notification[]>("GET", "/api/notifications"),
   markRead: (ids?: string[]) => call<unknown>("POST", "/api/notifications/read", ids ? { ids } : {}),
+  versions: (id: string) => call<VersionInfo[]>("GET", `/api/boards/${id}/versions`),
+  saveVersion: (id: string, name: string) => call<{ id: string }>("POST", `/api/boards/${id}/versions`, { name }),
+  restoreVersion: (id: string, versionId: string) => call<{ state: string }>("POST", `/api/boards/${id}/versions/${versionId}/restore`),
+  deleteVersion: (id: string, versionId: string) => call<unknown>("DELETE", `/api/boards/${id}/versions/${versionId}`),
+  search: (q: string) => call<SearchHit[]>("GET", `/api/search?q=${encodeURIComponent(q)}`),
   recordExport: (id: string, format: string, scope = "board") => call<unknown>("POST", `/api/boards/${id}/exports`, { format, scope }),
   importBoard: (file: string, classification?: string) => call<{ id: string }>("POST", "/api/boards/import", { file, classification }),
   logout: () => call<unknown>("POST", "/auth/logout"),

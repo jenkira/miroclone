@@ -7,6 +7,8 @@ export type AuditAction =
   | "export"
   | "import"
   | "upload"
+  | "version_create"
+  | "version_restore"
   | "delete";
 
 export interface AuditEvent {

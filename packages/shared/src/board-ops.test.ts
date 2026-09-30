@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import { alignX, Board, distributeX } from "./board-ops.js";
+import { boardText } from "./search-text.js";
 
 const sticky = (extra = {}) => ({ type: "sticky" as const, ...extra });
 
@@ -112,6 +113,46 @@ describe("copy and paste", () => {
     const pastedConnector = two.list().find((o) => o.type === "connector")!;
     expect(pastedConnector.type === "connector" && [pastedConnector.from, pastedConnector.to].every((id) => two.get(id))).toBe(true);
     expect(two.list().some((o) => o.id === a.id)).toBe(false);
+  });
+});
+
+describe("restoreObjects", () => {
+  it("returns the board to a saved version, and undo puts the newer content back", () => {
+    const b = new Board(new Y.Doc());
+    const keep = b.add(sticky({ x: 0, text: "original" }));
+    const gone = b.add(sticky({ x: 50 }));
+    const saved = b.list().map((o) => ({ ...o }));
+    b.update(keep.id, { text: "edited" } as never);
+    const added = b.add(sticky({ x: 99 }));
+    b.remove([gone.id]);
+    expect(b.restoreObjects(saved)).toEqual({ removed: 1, added: 1, changed: 1 });
+    expect(b.get(added.id)).toBeUndefined();
+    expect(b.get(gone.id)).toBeDefined();
+    expect((b.get(keep.id) as { text: string }).text).toBe("original");
+    b.undo.undo();
+    expect(b.get(added.id)).toBeDefined();
+    expect((b.get(keep.id) as { text: string }).text).toBe("edited");
+  });
+  it("leaves unchanged objects alone", () => {
+    const b = new Board(new Y.Doc());
+    b.add(sticky());
+    expect(b.restoreObjects(b.list())).toEqual({ removed: 0, added: 0, changed: 0 });
+  });
+  it("refuses a version that holds an invalid object", () => {
+    const b = new Board(new Y.Doc());
+    expect(() => b.restoreObjects([{ id: "x", type: "text", link: "javascript:alert(1)" } as never])).toThrow();
+  });
+});
+
+describe("boardText", () => {
+  it("collects searchable text from every object that has any", () => {
+    const b = new Board(new Y.Doc());
+    b.add({ type: "sticky", text: "Budget review" });
+    b.add({ type: "shape", kind: "rectangle", text: "Risks" });
+    b.add({ type: "text", text: "Owner: Ann", link: "https://example.test/doc" });
+    b.add({ type: "frame", title: "Sprint 12" });
+    b.add({ type: "stroke", points: [0, 0, 1, 1] });
+    expect(boardText(b.list()).split("\n")).toEqual(["Budget review", "Risks", "Owner: Ann", "https://example.test/doc", "Sprint 12"]);
   });
 });
 

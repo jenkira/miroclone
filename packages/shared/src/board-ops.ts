@@ -116,6 +116,27 @@ export class Board {
     return this.list().filter((o) => ids.includes(o.id) || (o.groupId && groups.has(o.groupId))).map((o) => o.id);
   }
 
+  /**
+   * Replaces the board's contents with a saved version, as one undoable step (BRD-6).
+   * It runs as a normal edit, so connected users see it and the server applies its usual role checks.
+   * Returns how many objects were removed, added, and changed.
+   */
+  restoreObjects(saved: readonly BoardObject[]): { removed: number; added: number; changed: number } {
+    return this.step(() => {
+      const want = new Map(saved.map((o) => [o.id, boardObjectSchema.parse(o)]));
+      let removed = 0, added = 0, changed = 0;
+      for (const id of [...this.objects.keys()]) {
+        if (!want.has(id)) { this.objects.delete(id); removed++; }
+      }
+      for (const [id, o] of want) {
+        const cur = this.objects.get(id);
+        if (!cur) { this.objects.set(id, o); added++; }
+        else if (JSON.stringify(cur) !== JSON.stringify(o)) { this.objects.set(id, o); changed++; }
+      }
+      return { removed, added, changed };
+    });
+  }
+
   /** Connector end points, from the centres of the objects it attaches to (CNV-6). */
   connectorEnds(id: string): { from: { x: number; y: number }; to: { x: number; y: number } } | undefined {
     const c = this.objects.get(id);

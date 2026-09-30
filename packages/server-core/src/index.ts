@@ -1,4 +1,6 @@
 export * from "./access.js";
+export * from "./search.js";
+export * from "./versions.js";
 export * from "./db.js";
 export * from "./redis-store.js";
 export * from "./session.js";

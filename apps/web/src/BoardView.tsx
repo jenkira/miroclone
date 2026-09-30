@@ -8,6 +8,7 @@ import { Canvas, colourFor, type CanvasApi } from "./Canvas.js";
 import { FormatBar } from "./FormatBar.js";
 import { CommentsPanel } from "./CommentsPanel.js";
 import { ExportMenu } from "./ExportMenu.js";
+import { HistoryPanel } from "./HistoryPanel.js";
 import { Notifications } from "./Notifications.js";
 import { pinsFor } from "./pins.js";
 import { cacheBoard, clearOfflineCache } from "./offline.js";
@@ -28,7 +29,10 @@ export function BoardView({ id, me }: { id: string; me: Me }) {
   const [sharing, setSharing] = useState(false);
   const [notice, setNotice] = useState("");
   const [threads, setThreads] = useState<Thread[]>([]);
-  const [showComments, setShowComments] = useState(false);
+  // One side panel at a time.
+  const [panel, setPanel] = useState<"comments" | "history" | null>(null);
+  const showComments = panel === "comments";
+  const setShowComments = (on: boolean) => setPanel(on ? "comments" : null);
   const [selectedThread, setSelectedThread] = useState<string>();
   const [pending, setPending] = useState<{ x: number; y: number; objectId?: string }>();
   const [, bump] = useState(0);
@@ -117,6 +121,7 @@ export function BoardView({ id, me }: { id: string; me: Me }) {
         {meta.role === "owner" && <button onClick={() => setSharing(true)}>Share</button>}
         <ExportMenu board={session.board} title={meta.title} classification={meta.classification} selection={() => apiRef.current?.selection() ?? []}
           authorise={(format, scope) => api.recordExport(id, format, scope) as Promise<void>} loadImage={(fileId) => api.fetchFile(id, fileId)} />
+        {!readOnly && <button aria-pressed={panel === "history"} onClick={() => setPanel(panel === "history" ? null : "history")}>History</button>}
         <button aria-pressed={showComments} onClick={() => setShowComments(!showComments)}>Comments{threads.filter((t) => !t.resolved).length ? ` (${threads.filter((t) => !t.resolved).length})` : ""}</button>
         <Notifications />
         <span style={{ marginLeft: "auto", display: "flex", gap: 4 }} aria-label="People on this board">
@@ -140,6 +145,7 @@ export function BoardView({ id, me }: { id: string; me: Me }) {
             onPinClick={(tid) => { setSelectedThread(tid); setShowComments(true); }}
             onComment={(at) => { setPending(at); setShowComments(true); }} />
         </div>
+        {panel === "history" && !readOnly && <HistoryPanel boardId={id} board={session.board} canDelete={meta.role === "owner"} />}
         {showComments && (
           <CommentsPanel boardId={id} threads={threads} me={me.id} canComment={canComment} canModerate={canModerate}
             selected={selectedThread} pending={pending} onChanged={() => void loadThreads()}

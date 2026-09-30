@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import * as Y from "yjs";
 import { atLeast, boardRoles, defaultClassifications, importJson, OBJECTS_MAP, type BoardRole } from "@miroclone/shared";
-import { appendUpdate, openTokens, sealTokens } from "@miroclone/server-core";
+import { appendUpdate, deleteVersion, listVersions, openTokens, sealTokens, searchBoards, snapshot, versionState } from "@miroclone/server-core";
 import { createHash, randomUUID } from "node:crypto";
 import type { GraphClient } from "./graph.js";
 import { detectImageType, MAX_UPLOAD_BYTES, svgProblem } from "./files.js";
@@ -195,6 +195,48 @@ export function boardRoutes(app: FastifyInstance, opts: { db: Db; sessions: Sess
         audit({ action: "classification_change", actor: req.session!.userId, boardId: req.params.id, detail: { ...change, reason: req.body.reason } });
         return change;
       });
+
+    // --- Version history (BRD-6) ---
+    const editorOn = async (req: FastifyRequest, id: string, min: BoardRole = "editor") => {
+      const role = await boards.roleOnBoard(db, actorOf(req), id);
+      if (!role) throw new boards.NotFound();
+      if (!atLeast(role, min)) throw new boards.Forbidden();
+    };
+
+    api.get<{ Params: { id: string } }>("/api/boards/:id/versions", async (req) => {
+      await editorOn(req, req.params.id);
+      return listVersions(db, req.params.id);
+    });
+
+    api.post<{ Params: { id: string }; Body: { name?: string } }>("/api/boards/:id/versions", async (req, reply) => {
+      await editorOn(req, req.params.id);
+      const name = (req.body?.name ?? "").trim();
+      if (!name || name.length > 100) throw new boards.Invalid("A version needs a name of 1 to 100 characters.");
+      const id = await snapshot(db, req.params.id, { kind: "named", name, userId: req.session!.userId });
+      audit({ action: "version_create", actor: req.session!.userId, boardId: req.params.id, detail: { versionId: id } });
+      return reply.code(201).send({ id });
+    });
+
+    // The editor's own client applies the state as a normal, undoable edit, so the collaboration service still
+    // enforces roles and connected users see the change. This call gives the saved state and records the audit event.
+    api.post<{ Params: { id: string; versionId: string } }>("/api/boards/:id/versions/:versionId/restore", async (req) => {
+      await editorOn(req, req.params.id);
+      if (!UUID.test(req.params.versionId)) throw new boards.NotFound();
+      const state = await versionState(db, req.params.id, req.params.versionId);
+      if (!state) throw new boards.NotFound();
+      audit({ action: "version_restore", actor: req.session!.userId, boardId: req.params.id, detail: { versionId: req.params.versionId } });
+      return { state: Buffer.from(state).toString("base64") };
+    });
+
+    api.delete<{ Params: { id: string; versionId: string } }>("/api/boards/:id/versions/:versionId", async (req) => {
+      await editorOn(req, req.params.id, "owner");
+      if (!UUID.test(req.params.versionId) || !(await deleteVersion(db, req.params.id, req.params.versionId))) throw new boards.NotFound();
+      return { ok: true };
+    });
+
+    // --- Search (BRD-4). Results cover only boards the user can open. ---
+    api.get<{ Querystring: { q?: string } }>("/api/search", async (req) =>
+      searchBoards(db, actorOf(req), (req.query.q ?? "").slice(0, 200)));
 
     // --- Comments and notifications (COL-7, COL-8) ---
     api.get<{ Params: { id: string } }>("/api/boards/:id/comments", async (req) => comments.listThreads(db, actorOf(req), req.params.id));
