@@ -3,7 +3,19 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "scripts": { "typecheck": "tsc -p .", "test": "vitest run", "build": "tsc -p .", "start": "node --import tsx src/main.ts" },
-  "dependencies": { "@miroclone/shared": "workspace:*", "fastify": "^5.0.0" },
-  "devDependencies": { "tsx": "^4.19.0" }
+  "scripts": {
+    "typecheck": "tsc -p .",
+    "test": "vitest run",
+    "build": "tsc -p .",
+    "start": "node --import tsx src/main.ts"
+  },
+  "dependencies": {
+    "@fastify/cookie": "^11.1.2",
+    "@miroclone/shared": "workspace:*",
+    "fastify": "^5.0.0",
+    "jose": "^6.2.12"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.0"
+  }
 }
