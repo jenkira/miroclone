@@ -5,8 +5,16 @@ This file gives Claude Code the context it needs to work in this repository.
 ## Project
 
 Miroclone is an internal, self-hosted collaborative whiteboard that offers the
-core capabilities of Miro. The repository holds only the product
-requirements document (PRD) so far. No application code exists yet.
+core capabilities of Miro. The repository holds the product requirements
+document (PRD) and the R0 (foundations) code, organised as a pnpm monorepo:
+
+- `packages/shared`: Object model, roles, classifications, and claim checks.
+- `services/api`: Node.js API service (health, audit log, claim checks).
+- `services/collab`: Hocuspocus collaboration service with role enforcement.
+- `apps/web`: React and PixiJS canvas prototype.
+- `deploy/helm/miroclone`: Helm chart skeleton for RKE2.
+
+Run `pnpm install`, `pnpm typecheck`, and `pnpm test` from the repository root.
 
 The source of truth for scope, requirements, and architecture is
 [`docs/PRD.md`](docs/PRD.md). Read it before you propose a design or write

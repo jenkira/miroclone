@@ -1,0 +1,13 @@
+{
+  "name": "@miroclone/collab",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": { "typecheck": "tsc -p .", "test": "vitest run", "build": "tsc -p .", "start": "node --import tsx src/main.ts" },
+  "dependencies": {
+    "@hocuspocus/server": "^2.15.0",
+    "@miroclone/shared": "workspace:*",
+    "yjs": "^13.6.0"
+  },
+  "devDependencies": { "tsx": "^4.19.0" }
+}

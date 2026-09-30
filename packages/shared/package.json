@@ -1,0 +1,9 @@
+{
+  "name": "@miroclone/shared",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "scripts": { "typecheck": "tsc -p .", "test": "vitest run", "build": "tsc -p ." },
+  "dependencies": { "zod": "^3.23.0" }
+}

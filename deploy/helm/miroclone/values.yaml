@@ -1,0 +1,43 @@
+# Image locations. Override every registry for air-gapped installs.
+global:
+  imageRegistry: registry.example.internal
+  imagePullSecrets: []
+
+services:
+  api:
+    image: miroclone/api
+    tag: "0.1.0"
+    port: 3000
+    replicas: 2
+  collab:
+    image: miroclone/collab
+    tag: "0.1.0"
+    port: 1234
+    replicas: 2
+
+entra:
+  tenantId: ""
+
+# Secrets come from Passwordstate through ESO (PRD section 8.5). Map each
+# Kubernetes Secret key to a Passwordstate password ID. Never put values here.
+externalSecrets:
+  enabled: true
+  refreshInterval: 1h
+  store:
+    kind: ClusterSecretStore
+    name: passwordstate
+  api:
+    ENTRA_CLIENT_SECRET: ""
+    SESSION_SIGNING_KEY: ""
+    POSTGRES_PASSWORD: ""
+  collab:
+    SESSION_SIGNING_KEY: ""
+    POSTGRES_PASSWORD: ""
+
+egress:
+  # Entra ID and Microsoft Graph, usually through the egress proxy.
+  cidrs: []
+
+# Labels that select the namespace of the cluster's ingress controller.
+ingressNamespaceLabels:
+  kubernetes.io/metadata.name: kube-system
