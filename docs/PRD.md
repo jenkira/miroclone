@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Status | Draft for review |
-| Version | 0.3 |
+| Version | 0.4 |
 | Date | 30 September 2026 |
 | Owner | To be confirmed |
 | Working name | Miroclone |
@@ -35,6 +35,7 @@ Table 1. Change history
 | 0.1 | 30 September 2026 | First draft. |
 | 0.2 | 30 September 2026 | Set the hosting platform to on-premises RKE2, set the highest classification to PROTECTED, and added Miro migration requirements. |
 | 0.3 | 30 September 2026 | Recorded answers to Q8 to Q11: both marking frameworks, all Entra users cleared, offline caching allowed, and MinIO for object storage. Set Passwordstate as the secrets repository. |
+| 0.4 | 30 September 2026 | Made object storage configurable for any S3-compatible store, allowed cleared guest users, and switched secrets to the platform team's existing Passwordstate operator. |
 
 ## 2. Background and research
 
@@ -175,7 +176,7 @@ Table 4. Identity and access requirements
 | IAM-9 | The app handles group overage (users in more than 200 groups) by resolving memberships through Microsoft Graph. | P1 |
 | IAM-10 | The app ends sessions after a configurable idle period and a maximum lifetime, set to meet the Information Security Manual (ISM). It re-checks role assignments on each session refresh. | P1 |
 | IAM-11 | The app treats every user in the configured tenant with an app role as cleared for PROTECTED, and doesn't check clearance separately. The process for assigning the `Whiteboard.User` role must confirm that the user is cleared. | P0 |
-| IAM-12 | The app supports Entra B2B guest users, if the organisation allows them. Guests can't open PROTECTED boards. | P2 |
+| IAM-12 | The app supports Entra B2B guest users. A guest with an app role counts as cleared, under IAM-11, and has the same access as other users. | P2 |
 
 ### 6.2 Boards and organisation
 
@@ -410,10 +411,12 @@ The system has the following components:
    a managed on-premises PostgreSQL service.
 6. **Redis**: Handles collaboration pub/sub, session storage, and the job
    queue. Valkey is a drop-in open-source alternative.
-7. **Object storage**: The organisation's MinIO service, through its
-   S3-compatible API, for images, files, exports, and thumbnails. The
-   services use only the standard S3 API, so the store can change later
-   without code changes.
+7. **Object storage**: Any S3-compatible store that the organisation
+   chooses, for images, files, exports, and thumbnails. The services use only
+   the standard S3 API. The Helm chart lets administrators set the endpoint,
+   region, bucket names, path-style or virtual-host addressing, and a custom
+   certificate authority. MinIO is the candidate store, subject to open
+   question Q14.
 8. **Migration tool**: A separate command-line tool that runs outside the
    cluster and converts Miro boards into the product's JSON format.
 
@@ -486,12 +489,13 @@ characteristics:
 - Includes liveness, readiness, and startup probes on every service.
 - Includes NetworkPolicies that allow only the required traffic between
   components, and egress only to Entra ID and Microsoft Graph.
-- Takes secrets from Passwordstate. External Secrets Operator has no native
-  Passwordstate provider, so the recommended approach uses its webhook
-  provider to read secrets through the Passwordstate REST API. The API key
-  gives read-only access to one password list for this product, and
-  Passwordstate restricts it to the cluster's egress IP addresses. The chart
-  never stores secrets in values files. See open question Q15.
+- Takes secrets from Passwordstate through the operator that the platform
+  team already runs to sync Passwordstate secrets into Kubernetes. The chart
+  reads standard Kubernetes Secrets, so it doesn't depend on the operator's
+  details, and never stores secrets in values files. If that operator can't
+  be used, the fallback is the External Secrets Operator webhook provider
+  with a read-only Passwordstate API key, scoped to one password list and
+  restricted to the cluster's IP addresses. See open question Q15.
 
 ### 8.5 Observability
 
@@ -510,9 +514,10 @@ The deployment meets the following backup requirements:
 
 - Takes continuous PostgreSQL backups with point-in-time recovery, to meet
   the 15-minute RPO. CloudNativePG writes these backups to object storage.
-- Turns on versioning and object locking in MinIO.
-- Copies backups to a second storage location, so a MinIO failure doesn't
-  lose both the data and its backups.
+- Turns on versioning and object locking in the object store, if the store
+  supports them.
+- Copies backups to a second storage location, so a failure of the object
+  store doesn't lose both the data and its backups.
 - Stores backups encrypted, on infrastructure authorised for PROTECTED.
 - Backs up Kubernetes resources with the cluster's existing tool, such as
   Rancher Backups or Velero.
@@ -562,9 +567,9 @@ Table 15. Risks and mitigations
 | The PROTECTED network blocks or restricts egress to Entra ID and Microsoft Graph. | Users can't sign in. | Confirm the egress path and proxy rules in R0. |
 | Yjs documents grow large on long-lived boards. | Slow board loading and high memory use. | Compact updates into snapshots, use garbage collection, and enforce the PRF-2 object limit. |
 | Proxies or ingress timeouts drop WebSocket connections. | Frequent reconnections. | Set long idle timeouts, send heartbeats, and reconnect automatically with backoff. |
-| MinIO's community edition is archived (February 2026) and gets no security fixes. | An unpatched store fails ISM patching controls and blocks authorisation. | Confirm the MinIO edition (Q14). If it's the community edition, move to the supported commercial edition (AIStor) or another S3-compatible store before general availability. |
-| The Passwordstate API key is a bootstrap secret held in the cluster. | Anyone who reads it can read the product's secrets. | Scope the key to one read-only password list, restrict it by IP address, rotate it on a schedule, and limit which accounts can read the Kubernetes secret that holds it. |
-| The `Whiteboard.User` app role acts as the clearance check (IAM-11). | An uncleared user who gets the role can open PROTECTED boards. | Assign the role only through a group that the security team controls, and review its membership regularly. |
+| The chosen object store gets no security fixes. For example, MinIO's community edition was archived in February 2026. | An unpatched store fails ISM patching controls and blocks authorisation. | Choose a supported, patched S3-compatible store before general availability (Q14). The product works with any S3-compatible store, so the choice doesn't affect the design. |
+| The Passwordstate sync operator's credential gives read access to the product's secrets. | Anyone who reads the credential can read the product's secrets. | Scope the credential to the product's password list, and limit which accounts can read the Kubernetes Secrets that the operator creates. |
+| The `Whiteboard.User` app role acts as the clearance check for staff and guests (IAM-11 and IAM-12). | An uncleared user or guest who gets the role can open PROTECTED boards. | Assign the role only through a group that the security team controls, and review its membership regularly. |
 | Miro content converts poorly. | Teams lose work or trust in the product. | Produce a report for each board (MIG-4). Run a trial migration on sample boards before bulk migration. |
 | Canvas apps are hard to make accessible. | Fails the WCAG requirement for some users. | Design keyboard and screen reader support from R1, and schedule an audit in R2. |
 | Entra configuration needs tenant administrator time. | Blocks R0 sign-in work. | Request the app registration, app roles, conditional access policy, and Graph consent at project start. |
@@ -587,13 +592,13 @@ Table 16. Answered questions
 | Q8 | Which classification framework governs the markings? | Both the PSPF and the QGISCF | Updated PMK-1 and added PMK-7. |
 | Q9 | Does a user's clearance level exist in Entra ID? | Every user in Entra ID is cleared | Replaced the clearance check in IAM-11 and added a risk. |
 | Q10 | Can browsers cache PROTECTED content for offline editing? | Yes | Removed the condition from COL-5 and added COL-10. |
-| Q11 | Which S3-compatible object store is available? | MinIO | Updated sections 8.1 and 8.6, and added a risk. |
+| Q3 | Can Entra B2B guest users use the product? | Yes. Guests with Entra access are cleared. | Updated IAM-12. |
+| Q11 | Which S3-compatible object store is available? | MinIO, or any S3-compatible store | Updated sections 8.1 and 8.6, and added a risk. |
 
 ### 12.2 Remaining questions
 
 The following questions need answers before or during R0:
 
-- **Q3**: Can Entra B2B guest users use the product (IAM-12)?
 - **Q4a**: If migration goes ahead, how many boards need to move, and what is
   their classification in Miro?
 - **Q5**: Is a Microsoft Teams integration (such as a Teams tab or
@@ -604,11 +609,12 @@ The following questions need answers before or during R0:
 - **Q12**: Is the cluster air-gapped apart from the Entra egress path, and
   which private container registry does it use?
 - **Q13**: Does the pilot need a separate non-production RKE2 cluster?
-- **Q14**: Which MinIO edition runs on premises: the archived community
-  edition or the supported commercial edition (AIStor)?
-- **Q15**: Does the platform team already have a pattern for syncing
-  Passwordstate secrets into Kubernetes? If so, the product uses that
-  pattern instead of the webhook approach in section 8.4.
+- **Q14**: Which supported S3-compatible store does the product use? The
+  owner chooses one before general availability. If it's MinIO, it must be a
+  supported, patched edition.
+- **Q15**: Which operator syncs Passwordstate secrets into Kubernetes, and how
+  does a workload request its secrets? The platform team runs one, and the
+  owner is confirming its name.
 
 ## 13. References
 
