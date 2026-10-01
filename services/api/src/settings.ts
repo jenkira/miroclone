@@ -44,6 +44,22 @@ export async function saveClassifications(db: Db, userId: string, input: unknown
   return cfg;
 }
 
+/** Hosts that link previews may fetch from (CNV-17). Empty by default, so no preview calls anything until an administrator allows a host. */
+export async function loadPreviewHosts(db: Db): Promise<string[]> {
+  const { rows } = await db.query<{ value: string[] }>("SELECT value FROM settings WHERE key = 'link_preview_hosts'");
+  return rows[0]?.value ?? [];
+}
+
+export async function savePreviewHosts(db: Db, userId: string, input: unknown): Promise<string[]> {
+  const parsed = z.array(z.string().trim().toLowerCase().regex(/^(\*\.)?[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?$/, "Use host names such as wiki.example.internal or *.example.internal.")).max(100).safeParse(input);
+  if (!parsed.success) throw new Invalid(parsed.error.issues[0]?.message ?? "That list isn't valid.");
+  const hosts = [...new Set(parsed.data)];
+  await db.query(
+    `INSERT INTO settings (key, value, updated_by) VALUES ('link_preview_hosts', $1, $2)
+     ON CONFLICT (key) DO UPDATE SET value = $1, updated_by = $2, updated_at = now()`, [JSON.stringify(hosts), userId]);
+  return hosts;
+}
+
 export interface Marker { key: string; label: string }
 
 const markerEntry = z.object({

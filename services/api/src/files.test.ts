@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { detectImageType, svgProblem } from "./files.js";
+import { detectImageType, isPdf, pdfPageCount, pdfProblem, svgProblem } from "./files.js";
 
 const bytes = (...n: number[]) => Uint8Array.from(n);
 const text = (s: string) => new TextEncoder().encode(s);
@@ -41,5 +41,32 @@ describe("svgProblem", () => {
     ['<!DOCTYPE svg [<!ENTITY x "y">]><rect/>', "entity declaration"],
   ])("refuses %s", (inner, why) => {
     expect(svgProblem(svg(inner))).toBe(why);
+  });
+});
+
+describe("PDF checks (CNV-17)", () => {
+  const pdf = (body: string) => text(`%PDF-1.4\n${body}\n%%EOF`);
+  it("recognises a PDF by its first bytes, even with padding before the header", () => {
+    expect(isPdf(pdf("1 0 obj << /Type /Catalog >> endobj"))).toBe(true);
+    expect(isPdf(text("\n\n%PDF-1.7\n"))).toBe(true);
+    expect(isPdf(text("<html>%PDF-</html>".padStart(2000, " ")))).toBe(false);
+    expect(isPdf(text("GIF89a"))).toBe(false);
+  });
+  it("accepts a plain document", () => {
+    expect(pdfProblem(pdf("1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj 2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj 3 0 obj << /Type /Page /Parent 2 0 R >> endobj"))).toBeUndefined();
+  });
+  it.each(["/JS (app.alert(1))", "/JavaScript", "/Launch", "/OpenAction 5 0 R", "/AA << >>", "/EmbeddedFile", "/RichMedia", "/XFA", "/SubmitForm", "/GoToR"])("refuses %s", (name) => {
+    expect(pdfProblem(pdf(`1 0 obj << ${name} >> endobj`))).toBe(name.slice(1).split(/[\s(]/)[0]);
+  });
+  it("sees through names written with #xx escapes", () => {
+    expect(pdfProblem(pdf("1 0 obj << /J#53 (x) >> endobj"))).toBe("JS");
+    expect(pdfProblem(pdf("1 0 obj << /Open#41ction 1 0 R >> endobj"))).toBe("OpenAction");
+  });
+  it("doesn't mistake a longer name for a denied one", () => {
+    expect(pdfProblem(pdf("1 0 obj << /JSON /AAA /Pages >> endobj"))).toBeUndefined();
+  });
+  it("counts pages from page objects, and not the page tree", () => {
+    expect(pdfPageCount(pdf("<< /Type /Pages /Count 2 >> << /Type /Page >> << /Type /Page >>"))).toBe(2);
+    expect(pdfPageCount(pdf("<< /Type /Pages >>"))).toBeUndefined();
   });
 });

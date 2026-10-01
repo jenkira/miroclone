@@ -6,6 +6,8 @@ type Input = Record<string, unknown> & { type: BoardObject["type"] };
 
 export class BoardLimitError extends Error {}
 
+type Shape = Extract<BoardObject, { type: "shape" }>;
+
 /** Operations on a board's Yjs document. Every change goes through these, so the rules live in one place. */
 export class Board {
   readonly objects: Y.Map<BoardObject>;
@@ -88,7 +90,8 @@ export class Board {
 
   move(ids: string[], dx: number, dy: number): void {
     this.tx(() => {
-      for (const id of ids) {
+      // Moving a mind map node takes its branch with it, unless the branch is already in the selection.
+      for (const id of this.withBranches(ids)) {
         const o = this.objects.get(id);
         if (o && !o.locked) this.update(id, { x: o.x + dx, y: o.y + dy });
       }
@@ -98,12 +101,112 @@ export class Board {
   /** Deletes objects, and any connector that attached to them. */
   remove(ids: string[]): void {
     this.step(() => {
-      const gone = new Set(ids.filter((id) => !this.objects.get(id)?.locked));
+      // Deleting a mind map node deletes its branch.
+      const gone = new Set(this.withBranches(ids).filter((id) => !this.objects.get(id)?.locked));
       for (const o of this.objects.values()) {
         if (o.type === "connector" && (gone.has(o.from) || gone.has(o.to))) gone.add(o.id);
       }
       for (const id of gone) this.objects.delete(id);
     });
+  }
+
+  // --- Mind maps (CNV-15). Nodes are rounded shapes marked `mind`, joined to their parent by a connector. ---
+
+  /** The nodes that hang directly from a node, top to bottom. */
+  mindChildren(id: string): BoardObject[] {
+    return [...this.objects.values()].filter((o) => o.type === "shape" && o.mind && o.parentId === id).sort((a, b) => a.y - b.y || (a.id < b.id ? -1 : 1));
+  }
+
+  /** The ids of the nodes below a node, at any depth. */
+  mindDescendants(id: string): string[] {
+    const out: string[] = [];
+    const walk = (n: string) => { for (const c of this.mindChildren(n)) { out.push(c.id); walk(c.id); } };
+    walk(id);
+    return out;
+  }
+
+  /** The given ids plus the branches of any mind map nodes among them. */
+  private withBranches(ids: string[]): string[] {
+    const all = new Set(ids);
+    for (const id of ids) { const o = this.objects.get(id); if (o?.type === "shape" && o.mind) for (const d of this.mindDescendants(id)) all.add(d); }
+    return [...all];
+  }
+
+  /** The top of a node's tree. */
+  mindRoot(id: string): string {
+    let cur = this.objects.get(id);
+    const seen = new Set<string>();
+    while (cur?.type === "shape" && cur.parentId && !seen.has(cur.id)) { seen.add(cur.id); const up = this.objects.get(cur.parentId); if (!up) break; cur = up; }
+    return cur?.id ?? id;
+  }
+
+  /** Starts a mind map with a central node at a point. */
+  addMindRoot(at: { x: number; y: number }, text = "Central idea"): Shape {
+    return this.add({ type: "shape", kind: "rounded", mind: true, text, fill: "#e3f2fd", stroke: "#1565c0", x: at.x - 90, y: at.y - 30, width: 180, height: 60 }) as Shape;
+  }
+
+  /** Adds a node under a node, below its other children, with a connector (CNV-15). Returns the new node. */
+  addMindChild(parentId: string, text = ""): Shape {
+    const parent = this.objects.get(parentId);
+    if (!parent || parent.type !== "shape" || !parent.mind) throw new Error("That isn't a mind map node.");
+    return this.step(() => {
+      const kids = this.mindChildren(parentId);
+      const last = kids.at(-1);
+      const node = this.add({
+        type: "shape", kind: "rounded", mind: true, parentId, text, fill: parent.fill, stroke: parent.stroke,
+        x: parent.x + parent.width + 80, y: last ? last.y + last.height + 20 : parent.y, width: 160, height: 50,
+      });
+      this.add({ type: "connector", routing: "curved", from: parentId, to: node.id, x: 0, y: 0, width: 1, height: 1 });
+      this.tidyMind(this.mindRoot(parentId));
+      return this.objects.get(node.id) as Shape;
+    });
+  }
+
+  /** Adds a node beside a node, on the same parent and just below it. The root has no sibling, so it gets a child. */
+  addMindSibling(id: string, text = ""): Shape {
+    const node = this.objects.get(id);
+    if (!node || node.type !== "shape" || !node.mind) throw new Error("That isn't a mind map node.");
+    if (!node.parentId) return this.addMindChild(id, text);
+    const parent = this.objects.get(node.parentId) as Extract<BoardObject, { type: "shape" }>;
+    return this.step(() => {
+      const sibling = this.add({
+        type: "shape", kind: "rounded", mind: true, parentId: node.parentId, text, fill: node.fill, stroke: node.stroke,
+        x: node.x, y: node.y + node.height + 1, width: node.width, height: node.height,
+      });
+      this.add({ type: "connector", routing: "curved", from: parent.id, to: sibling.id, x: 0, y: 0, width: 1, height: 1 });
+      this.tidyMind(this.mindRoot(id));
+      return this.objects.get(sibling.id) as Shape;
+    });
+  }
+
+  /**
+   * Lays out a whole tree: children sit to the right of their parent, stacked in their current order, and each parent
+   * is centred on its children. The root stays where it is.
+   */
+  tidyMind(rootId: string, gapX = 80, gapY = 20): void {
+    const root = this.objects.get(rootId);
+    if (!root || root.type !== "shape" || !root.mind) return;
+    const heights = new Map<string, number>();
+    const measure = (n: BoardObject): number => {
+      const kids = this.mindChildren(n.id);
+      const h = kids.length ? Math.max(n.height, kids.reduce((s, k) => s + measure(k), 0) + gapY * (kids.length - 1)) : n.height;
+      heights.set(n.id, h);
+      return h;
+    };
+    measure(root);
+    const place = (n: BoardObject, top: number) => {
+      const slot = heights.get(n.id)!;
+      const kids = this.mindChildren(n.id);
+      this.tx(() => this.update(n.id, { y: top + (slot - n.height) / 2 }));
+      let y = top;
+      for (const k of kids) {
+        const moved = { ...k, x: n.x + n.width + gapX };
+        this.tx(() => this.update(k.id, { x: moved.x }));
+        place(this.objects.get(k.id)!, y);
+        y += heights.get(k.id)! + gapY;
+      }
+    };
+    place(root, root.y - (heights.get(root.id)! - root.height) / 2);
   }
 
   bringToFront(id: string): void {

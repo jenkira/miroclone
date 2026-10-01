@@ -65,7 +65,7 @@ export const api = {
   uploadFile: async (boardId: string, file: Blob) => {
     const res = await fetch(`/api/boards/${boardId}/files`, { method: "POST", credentials: "same-origin", headers: { "content-type": file.type || "application/octet-stream" }, body: file });
     if (!res.ok) throw Object.assign(new Error(`${res.status}`), { status: res.status });
-    return res.json() as Promise<{ id: string; mimeType: string }>;
+    return res.json() as Promise<{ id: string; mimeType: string; pages?: number }>;
   },
   fetchFile: async (boardId: string, fileId: string) => {
     const res = await fetch(`/api/boards/${boardId}/files/${fileId}`, { credentials: "same-origin" });
@@ -98,6 +98,9 @@ export const api = {
   saveRetention: (archiveAfterMonths: number | null) => call<{ archiveAfterMonths: number | null }>("PUT", "/api/admin/retention", { archiveAfterMonths }),
   archiveBoard: (id: string) => call<unknown>("POST", `/api/boards/${id}/archive`),
   unarchiveBoard: (id: string) => call<unknown>("POST", `/api/boards/${id}/unarchive`),
+  linkPreview: (id: string, url: string) => call<{ url: string; title: string; description: string; fetched: boolean }>("GET", `/api/boards/${id}/link-preview?url=${encodeURIComponent(url)}`),
+  previewHosts: () => call<string[]>("GET", "/api/admin/link-preview-hosts"),
+  savePreviewHosts: (hosts: string[]) => call<string[]>("PUT", "/api/admin/link-preview-hosts", hosts),
   markers: () => call<MarkerDef[]>("GET", "/api/markers"),
   saveMarkerList: (list: MarkerDef[]) => call<MarkerDef[]>("PUT", "/api/admin/markers", list),
   setBoardMarkers: (id: string, markers: string[]) => call<{ markers: string[] }>("PUT", `/api/boards/${id}/markers`, { markers }),

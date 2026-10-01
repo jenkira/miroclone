@@ -7,6 +7,8 @@ import { api, type BoardSummary, type Me, type Thread } from "./api.js";
 import { Banner } from "./Banner.js";
 import { Canvas, colourFor, type CanvasApi } from "./Canvas.js";
 import { CardBar } from "./CardBar.js";
+import { TableBar } from "./TableBar.js";
+import { EmbedBar } from "./EmbedBar.js";
 import { Reactions } from "./Reactions.js";
 import { Minimap } from "./Minimap.js";
 import { FormatBar } from "./FormatBar.js";
@@ -37,6 +39,7 @@ export function BoardView({ id, me }: { id: string; me: Me }) {
   const [status, setStatus] = useState<Status>("connecting");
   const apiRef = useRef<CanvasApi | null>(null);
   const csvInput = useRef<HTMLInputElement>(null);
+  const pdfInput = useRef<HTMLInputElement>(null);
   // Viewport changes go to the minimap without re-rendering this view on every pan frame.
   const viewSubs = useRef(new Set<(v: Viewport) => void>());
   const subscribeView = useCallback((fn: (v: Viewport) => void) => { viewSubs.current.add(fn); return () => { viewSubs.current.delete(fn); }; }, []);
@@ -133,6 +136,37 @@ export function BoardView({ id, me }: { id: string; me: Me }) {
   // Pins follow their objects, so they're recomputed when objects change.
   const pins = pinsFor(threads, (oid) => session.board.get(oid));
 
+  /** Uploads a PDF and adds a card for it. The server checks and scans it like any upload (CNV-17). */
+  const addPdf = async (file: File) => {
+    setNotice("");
+    if (file.type !== "application/pdf") { setNotice("Choose a PDF file."); return; }
+    if (file.size > MAX_BYTES) { setNotice(uploadMessage(413)); return; }
+    try {
+      const { id: fileId, pages } = await api.uploadFile(id, file);
+      const c = apiRef.current?.viewCentre() ?? { x: 0, y: 0 };
+      const obj = session.board.add({ type: "embed", kind: "pdf", fileId, name: file.name.slice(0, 200), title: file.name.replace(/\.pdf$/i, "").slice(0, 300), ...(pages ? { pages } : {}), x: c.x - 130, y: c.y - 50, width: 260, height: 100 } as never);
+      apiRef.current?.select([obj.id]);
+    } catch (e) {
+      const status = (e as { status?: number }).status;
+      setNotice(status === 422 ? "That PDF can't be added, because it contains active content or failed the malware scan." : uploadMessage(status));
+    }
+  };
+
+  /** Adds a link card. The service fetches a title only from hosts an administrator allowed (CNV-17). */
+  const addLink = async () => {
+    setNotice("");
+    const url = window.prompt("Paste a web address (https://…).")?.trim();
+    if (!url) return;
+    if (!/^https?:\/\//i.test(url)) { setNotice("A link must start with http:// or https://."); return; }
+    let title = "", description = "";
+    try { const p = await api.linkPreview(id, url); if (p.fetched) { title = p.title; description = p.description; } } catch { /* The card still works without a preview. */ }
+    const c = apiRef.current?.viewCentre() ?? { x: 0, y: 0 };
+    try {
+      const obj = session.board.add({ type: "embed", kind: "link", url, title, description, x: c.x - 130, y: c.y - 50, width: 260, height: 100 } as never);
+      apiRef.current?.select([obj.id]);
+    } catch { setNotice("That address isn't valid."); }
+  };
+
   /** Adds a sticky note for each row of a CSV file, in a grid around the middle of the view (EXP-4). */
   const importCsv = async (file: File) => {
     setNotice("");
@@ -180,6 +214,10 @@ export function BoardView({ id, me }: { id: string; me: Me }) {
         {readOnly && <span>View only</span>}
         {!readOnly && <>
           <button onClick={() => fileInput.current?.click()}>Add image</button>
+          <button onClick={() => pdfInput.current?.click()}>Add PDF</button>
+          <input ref={pdfInput} type="file" accept="application/pdf" hidden aria-label="Choose a PDF file"
+            onChange={(e) => { const f = e.target.files?.[0]; if (f) void addPdf(f); e.target.value = ""; }} />
+          <button onClick={() => void addLink()}>Add link</button>
           <button onClick={() => csvInput.current?.click()}>Import CSV</button>
           <input ref={csvInput} type="file" accept=".csv,text/csv" hidden aria-label="Choose a CSV file"
             onChange={(e) => { const f = e.target.files?.[0]; if (f) void importCsv(f); e.target.value = ""; }} />
@@ -220,6 +258,8 @@ export function BoardView({ id, me }: { id: string; me: Me }) {
       <Toolbar tool={tool} onChange={(t) => { setTool(t); if (t === "comment") setShowComments(true); if (t === "vote") setPanel("voting"); }} disabled={readOnly} canComment={canComment} canVote={canComment} />
       <FormatBar board={session.board} selection={selected} readOnly={readOnly} api={apiRef} />
       <CardBar board={session.board} selection={selected} readOnly={readOnly} />
+      <TableBar board={session.board} selection={selected} readOnly={readOnly} />
+      <EmbedBar board={session.board} boardId={id} selection={selected} />
       <WorkshopBar w={w} />
       <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
         <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>

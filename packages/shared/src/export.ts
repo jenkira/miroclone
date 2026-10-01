@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { boardObjectSchema, isSafeLink, MAX_OBJECTS_PER_BOARD, type BoardObject } from "./objects.js";
+import { boardObjectSchema, isSafeLink, isWebLink, MAX_OBJECTS_PER_BOARD, type BoardObject } from "./objects.js";
 import { formatDue, listLines, wrapText } from "./text.js";
 import { findClassification, type Classification } from "./classification.js";
 
@@ -37,6 +37,39 @@ function shapeMarkup(o: BoardObject, byId: Map<string, BoardObject>, images: Rec
   switch (o.type) {
     case "sticky":
       return `<rect x="${o.x}" y="${o.y}" width="${o.width}" height="${o.height}" fill="${colour(o.color, "#fff475")}" stroke="#bdbdbd"/>${t(o.text)}`;
+    case "embed": {
+      const chars = Math.max(8, Math.floor((o.width - 24) / 8));
+      const host = o.url ? (() => { try { return new URL(o.url).host; } catch { return ""; } })() : "";
+      const lines: { text: string; bold?: boolean; fill?: string; size: number }[] = [];
+      for (const l of wrapText(o.title || o.name || host || (o.kind === "pdf" ? "PDF file" : "Link"), chars)) lines.push({ text: l, bold: true, size: 15 });
+      lines.push({ text: o.kind === "pdf" ? `PDF${o.pages ? `, ${o.pages} page${o.pages === 1 ? "" : "s"}` : ""}` : host, size: 12, fill: "#1565c0" });
+      for (const l of wrapText(o.description, chars)) lines.push({ text: l, size: 12 });
+      let y = o.y + 8;
+      const rows: string[] = [];
+      for (const l of lines) {
+        y += l.size * 1.3;
+        if (y > o.y + o.height - 4) break;
+        rows.push(`<text x="${o.x + 12}" y="${y}" font-size="${l.size}" font-family="sans-serif" font-weight="${l.bold ? 700 : 400}" fill="${l.fill ?? "#1a1a1a"}">${esc(l.text)}</text>`);
+      }
+      const card = `<rect x="${o.x}" y="${o.y}" width="${o.width}" height="${o.height}" rx="6" fill="#fff" stroke="#9e9e9e"/>` + rows.join("");
+      // A link in an SVG is only kept when it's a web address, as for text links.
+      return o.url && isWebLink(o.url) ? `<a href="${esc(o.url)}">${card}</a>` : card;
+    }
+    case "table": {
+      const cw = o.width / o.cols, ch = o.height / o.rows;
+      const parts = [`<rect x="${o.x}" y="${o.y}" width="${o.width}" height="${o.height}" fill="#fff" stroke="#757575"/>`];
+      if (o.header) parts.push(`<rect x="${o.x}" y="${o.y}" width="${o.width}" height="${ch}" fill="#eceff1" stroke="#757575"/>`);
+      for (let c = 1; c < o.cols; c++) parts.push(`<line x1="${o.x + c * cw}" y1="${o.y}" x2="${o.x + c * cw}" y2="${o.y + o.height}" stroke="#9e9e9e"/>`);
+      for (let r = 1; r < o.rows; r++) parts.push(`<line x1="${o.x}" y1="${o.y + r * ch}" x2="${o.x + o.width}" y2="${o.y + r * ch}" stroke="#9e9e9e"/>`);
+      const chars = Math.max(3, Math.floor((cw - 12) / 7.5)), maxLines = Math.max(1, Math.floor((ch - 8) / 16));
+      for (let r = 0; r < o.rows; r++) for (let c = 0; c < o.cols; c++) {
+        const text = o.cells[r * o.cols + c];
+        if (!text) continue;
+        wrapText(text, chars).slice(0, maxLines).forEach((line, i) => parts.push(
+          `<text x="${o.x + c * cw + 6}" y="${o.y + r * ch + 18 + i * 16}" font-size="13" font-family="sans-serif" font-weight="${o.header && r === 0 ? 700 : 400}" fill="#1a1a1a">${esc(line)}</text>`));
+      }
+      return parts.join("");
+    }
     case "card": {
       const chars = Math.max(8, Math.floor((o.width - 24) / 8));
       const lines: { text: string; bold?: boolean; fill?: string; size: number }[] = [];

@@ -17,6 +17,34 @@ export function detectImageType(b: Uint8Array): ImageType | undefined {
   return undefined;
 }
 
+/** True when the file starts the way a PDF does. A PDF may start with a few bytes of padding, which the format allows. */
+export function isPdf(b: Uint8Array): boolean {
+  return Buffer.from(b.subarray(0, 1024)).includes("%PDF-");
+}
+
+/**
+ * Names that make a PDF run code, open other files or addresses, or carry other files (CNV-17). Names can hide
+ * characters as #xx, so those are decoded before the check. Compressed object streams hide names this check can't see,
+ * so it's a second layer, and the malware scanner and the browser's PDF viewer are the first (section 7.4).
+ */
+const PDF_DENY = ["JS", "JavaScript", "Launch", "OpenAction", "AA", "EmbeddedFile", "EmbeddedFiles", "RichMedia", "XFA", "SubmitForm", "ImportData", "GoToR", "GoToE"];
+
+/** Returns the reason a PDF is refused, or undefined when it's acceptable. */
+export function pdfProblem(b: Uint8Array): string | undefined {
+  const text = Buffer.from(b).toString("latin1");
+  for (const m of text.matchAll(/\/([^\s/<>[\]()%{}]+)/g)) {
+    const name = m[1]!.replace(/#([0-9a-fA-F]{2})/g, (_, h: string) => String.fromCharCode(parseInt(h, 16)));
+    if (PDF_DENY.includes(name)) return name;
+  }
+  return undefined;
+}
+
+/** Counts pages from the page objects, or returns undefined when they sit in compressed streams. */
+export function pdfPageCount(b: Uint8Array): number | undefined {
+  const n = (Buffer.from(b).toString("latin1").match(/\/Type\s*\/Page(?![A-Za-z])/g) ?? []).length;
+  return n || undefined;
+}
+
 /**
  * Patterns that make an SVG active or able to load other content. The browser only ever shows SVG
  * through an <img> element, where scripts don't run, so this check is a second layer (section 7.4).

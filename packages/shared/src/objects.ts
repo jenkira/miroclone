@@ -12,6 +12,8 @@ export const objectTypes = [
   "frame",
   "image",
   "card",
+  "table",
+  "embed",
 ] as const;
 export type ObjectType = (typeof objectTypes)[number];
 
@@ -44,6 +46,10 @@ export const shapeSchema = z.object({
   fill: z.string().default("#ffffff"),
   stroke: z.string().default("#1a1a1a"),
   text: z.string().default(""),
+  /** Marks a node of a mind map (CNV-15). The root has no parent. */
+  mind: z.boolean().optional(),
+  /** The node this one hangs from in a mind map. */
+  parentId: z.string().optional(),
 });
 
 /** Links must be web or mail links. Other schemes, such as `javascript:`, never reach the page. */
@@ -119,6 +125,40 @@ export const cardSchema = z.object({
   color: z.string().default("#ffffff"),
 });
 
+/** Limits for tables (CNV-16). */
+export const MAX_TABLE_ROWS = 50, MAX_TABLE_COLS = 20, MAX_CELL_TEXT = 1000;
+
+/**
+ * A table with editable cells (CNV-16). Cells are stored row by row, and rows and columns share the object's width
+ * and height equally. Concurrent edits to one table keep the last change, as for any other object.
+ */
+export const tableSchema = z.object({
+  ...base,
+  type: z.literal("table"),
+  rows: z.number().int().min(1).max(MAX_TABLE_ROWS),
+  cols: z.number().int().min(1).max(MAX_TABLE_COLS),
+  cells: z.array(z.string().max(MAX_CELL_TEXT)),
+  /** Whether the first row is a header. */
+  header: z.boolean().default(true),
+});
+
+/** Embeds are links with a preview card, and PDF files (CNV-17). Links must be web addresses. */
+export const isWebLink = (v: string) => v.length <= 2048 && /^https?:\/\//i.test(v);
+
+export const embedSchema = z.object({
+  ...base,
+  type: z.literal("embed"),
+  kind: z.enum(["link", "pdf"]),
+  /** For a link, where it goes. */
+  url: z.string().refine(isWebLink, "Links must start with http:// or https://").optional(),
+  /** For a PDF, the ID of the stored file. */
+  fileId: z.string().min(1).max(100).optional(),
+  name: z.string().max(200).default(""),
+  title: z.string().max(300).default(""),
+  description: z.string().max(1000).default(""),
+  pages: z.number().int().min(1).max(100000).optional(),
+});
+
 export const boardObjectSchema = z.discriminatedUnion("type", [
   stickySchema,
   shapeSchema,
@@ -128,7 +168,14 @@ export const boardObjectSchema = z.discriminatedUnion("type", [
   frameSchema,
   imageSchema,
   cardSchema,
-]);
+  tableSchema,
+  embedSchema,
+]).superRefine((o, ctx) => {
+  // A table needs one cell for each row and column. Zod can't refine one member of a discriminated union, so the check sits here.
+  if (o.type === "table" && o.cells.length !== o.rows * o.cols) ctx.addIssue({ code: "custom", path: ["cells"], message: "A table needs one cell for each row and column." });
+  if (o.type === "embed" && o.kind === "link" && !o.url) ctx.addIssue({ code: "custom", path: ["url"], message: "A link needs an address." });
+  if (o.type === "embed" && o.kind === "pdf" && !o.fileId) ctx.addIssue({ code: "custom", path: ["fileId"], message: "A PDF needs a stored file." });
+});
 export type BoardObject = z.infer<typeof boardObjectSchema>;
 
 /** Name of the Yjs map that holds all objects of a board. */

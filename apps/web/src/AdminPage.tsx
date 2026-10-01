@@ -12,6 +12,8 @@ export function AdminPage() {
   const [message, setMessage] = useState("");
   const [markers, setMarkers] = useState<MarkerDef[] | null>(null);
   const [markerMessage, setMarkerMessage] = useState("");
+  const [hosts, setHosts] = useState<string | null>(null);
+  const [hostsMessage, setHostsMessage] = useState("");
   const [months, setMonths] = useState<number | null | undefined>(undefined);
   const [retentionMessage, setRetentionMessage] = useState("");
   const [forbidden, setForbidden] = useState(false);
@@ -20,6 +22,7 @@ export function AdminPage() {
     api.stats().then(setStats).catch((e) => { if (e.status === 403) setForbidden(true); });
     api.classifications().then(setCfg).catch(() => {});
     api.markers().then(setMarkers).catch(() => {});
+    api.previewHosts().then((h) => setHosts(h.join("\n"))).catch(() => {});
     api.retention().then((r) => setMonths(r.archiveAfterMonths)).catch(() => {});
   }, []);
 
@@ -103,6 +106,22 @@ export function AdminPage() {
             try { await api.saveRetention(months); setRetentionMessage("Saved."); } catch { setRetentionMessage("The rule wasn't saved."); }
           }}>Save retention rule</button>
           <p role="status">{retentionMessage}</p>
+        </>
+      )}
+
+      <h2>Link previews</h2>
+      {hosts !== null && (
+        <>
+          <p>A link card can show a page's title and description. The service fetches the page itself, and only from the hosts you list here, so a board never causes a call to an outside site. List one host name on each line, such as wiki.example.internal or *.example.internal. With an empty list, no link preview fetches anything.</p>
+          <label>Allowed hosts<br /><textarea rows={4} cols={50} value={hosts} onChange={(e) => setHosts(e.target.value)} /></label>
+          <p>
+            <button onClick={async () => {
+              setHostsMessage("");
+              try { setHosts((await api.savePreviewHosts(hosts.split("\n").map((h) => h.trim()).filter(Boolean))).join("\n")); setHostsMessage("Saved."); }
+              catch { setHostsMessage("The list wasn't saved. Use host names, one on each line."); }
+            }}>Save allowed hosts</button>
+          </p>
+          <p role="status">{hostsMessage}</p>
         </>
       )}
 

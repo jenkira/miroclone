@@ -4,17 +4,18 @@ import { atLeast, boardRoles, builtinTemplates, compareClassification, exportSvg
 import { appendUpdate, deleteVersion, loadDoc, loadRetention, saveRetention, listVersions, openTokens, sealTokens, searchBoards, snapshot, versionState } from "@miroclone/server-core";
 import { createHash, randomUUID } from "node:crypto";
 import type { GraphClient } from "./graph.js";
-import { detectImageType, MAX_UPLOAD_BYTES, svgProblem } from "./files.js";
+import { detectImageType, isPdf, MAX_UPLOAD_BYTES, pdfPageCount, pdfProblem, svgProblem } from "./files.js";
 import type { ObjectStore } from "@miroclone/server-core";
 import type { Scanner } from "./scanner.js";
 import type { OidcClient } from "./oidc.js";
 import { audit } from "./audit.js";
 import * as spaces from "./spaces.js";
 import { Conflict, importMigratedBoard } from "./migration.js";
+import { fetchPreview, type Preview, type PreviewDeps } from "./linkpreview.js";
 import * as boards from "./boards.js";
 import * as comments from "./comments.js";
 import * as workshop from "./workshop.js";
-import { loadClassifications, loadMarkers, saveClassifications, saveMarkers, usageStats, type ClassificationConfig } from "./settings.js";
+import { loadClassifications, loadMarkers, loadPreviewHosts, saveClassifications, saveMarkers, savePreviewHosts, usageStats, type ClassificationConfig } from "./settings.js";
 import type { Db } from "@miroclone/server-core";
 import { SESSION_COOKIE, type Session, type SessionManager } from "@miroclone/server-core";
 
@@ -38,7 +39,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export const exportFormats = ["png", "svg", "pdf", "json"] as const;
 
-export function boardRoutes(app: FastifyInstance, opts: { db: Db; sessions: SessionManager; exportPolicy?: ExportPolicy; graph: GraphClient; oidc: OidcClient; tokenKey: Buffer; store?: ObjectStore; scanner?: Scanner }) {
+export function boardRoutes(app: FastifyInstance, opts: { db: Db; sessions: SessionManager; exportPolicy?: ExportPolicy; graph: GraphClient; oidc: OidcClient; tokenKey: Buffer; store?: ObjectStore; scanner?: Scanner; previewDeps?: PreviewDeps }) {
   const { db } = opts;
   const actorOf = (r: FastifyRequest): boards.Actor => ({ id: r.session!.userId, groups: r.session!.groups });
 
@@ -107,7 +108,7 @@ export function boardRoutes(app: FastifyInstance, opts: { db: Db; sessions: Sess
     // --- Files (CNV-8) ---
     // Uploads arrive as raw bytes. Every type is parsed as a buffer, and the route decides what it accepts.
     api.addContentTypeParser(
-      ["image/png", "image/jpeg", "image/gif", "image/webp", "image/svg+xml", "application/octet-stream"],
+      ["image/png", "image/jpeg", "image/gif", "image/webp", "image/svg+xml", "application/pdf", "application/octet-stream"],
       { parseAs: "buffer", bodyLimit: MAX_UPLOAD_BYTES },
       (_req, body, done) => done(null, body),
     );
@@ -121,13 +122,18 @@ export function boardRoutes(app: FastifyInstance, opts: { db: Db; sessions: Sess
       const body = req.body;
       if (!Buffer.isBuffer(body) || body.length === 0) return reply.code(400).send({ error: "empty_file" });
 
-      const type = detectImageType(body);
+      // Images and PDFs are the only types. The file's own bytes decide the type, and the declared type must agree.
+      const type = isPdf(body) ? ("application/pdf" as const) : detectImageType(body);
       const declared = (req.headers["content-type"] ?? "").split(";")[0]!.trim();
       if (!type || (declared !== "application/octet-stream" && declared !== type))
         return reply.code(415).send({ error: "unsupported_type" });
       if (type === "image/svg+xml") {
         const why = svgProblem(body);
         if (why) return reply.code(422).send({ error: "svg_not_allowed", reason: why });
+      }
+      if (type === "application/pdf") {
+        const why = pdfProblem(body);
+        if (why) return reply.code(422).send({ error: "pdf_not_allowed", reason: why });
       }
 
       let scan;
@@ -145,7 +151,7 @@ export function boardRoutes(app: FastifyInstance, opts: { db: Db; sessions: Sess
         "INSERT INTO board_files (id, board_id, object_key, mime_type, size_bytes, sha256, uploaded_by) VALUES ($1, $2, $3, $4, $5, $6, $7)",
         [id, req.params.id, key, type, body.length, createHash("sha256").update(body).digest("hex"), req.session!.userId]);
       audit({ action: "upload", actor: req.session!.userId, boardId: req.params.id, detail: { allowed: true, mimeType: type, bytes: body.length } });
-      return reply.code(201).send({ id, mimeType: type });
+      return reply.code(201).send({ id, mimeType: type, ...(type === "application/pdf" ? { pages: pdfPageCount(body) } : {}) });
     });
 
     api.get<{ Params: { id: string; fileId: string } }>("/api/boards/:id/files/:fileId", async (req, reply) => {
@@ -274,6 +280,33 @@ export function boardRoutes(app: FastifyInstance, opts: { db: Db; sessions: Sess
         .header("content-security-policy", "default-src 'none'; style-src 'unsafe-inline'; sandbox")
         .header("cache-control", "private, max-age=60")
         .send(svg);
+    });
+
+    // Link previews (CNV-17). The server fetches, and only from hosts an administrator allowed, so a board never makes the
+    // browser or the service call an outside site.
+    api.get("/api/admin/link-preview-hosts", async (req) => { adminOnly(req); return loadPreviewHosts(db); });
+    api.put<{ Body: unknown }>("/api/admin/link-preview-hosts", async (req) => {
+      adminOnly(req);
+      const saved = await savePreviewHosts(db, req.session!.userId, req.body);
+      audit({ action: "settings_change", actor: req.session!.userId, detail: { setting: "link_preview_hosts", hosts: saved } });
+      return saved;
+    });
+    const previews = new Map<string, { at: number; value: Preview }>();
+    api.get<{ Params: { id: string }; Querystring: { url?: string } }>("/api/boards/:id/link-preview", async (req) => {
+      const role = await boards.roleOnBoard(db, actorOf(req), req.params.id);
+      if (!role) throw new boards.NotFound();
+      // Only people who can add to the board use this, so it isn't an open way to make the service fetch pages.
+      if (!atLeast(role, "editor")) throw new boards.Forbidden();
+      const url = req.query.url ?? "";
+      const hosts = await loadPreviewHosts(db);
+      const key = `${hosts.join(",")}|${url}`;
+      const hit = previews.get(key);
+      if (hit && Date.now() - hit.at < 5 * 60_000) return hit.value;
+      let value: Preview;
+      try { value = await fetchPreview(url, hosts, opts.previewDeps); } catch { throw new boards.Invalid("That isn't a web address."); }
+      if (previews.size > 500) previews.clear();
+      previews.set(key, { at: Date.now(), value });
+      return value;
     });
 
     // Retention (ADM-4). The worker archives boards that nobody has opened for the configured time.

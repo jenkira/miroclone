@@ -305,6 +305,7 @@ export function Canvas({ board, tool, readOnly, awareness, onToolDone, apiRef, o
         if (hit) {
           // Ctrl or Cmd plus click follows a link.
           if ((e.ctrlKey || e.metaKey) && hit.type === "text" && hit.link && isSafeLink(hit.link)) { window.open(hit.link, "_blank", "noopener,noreferrer"); return; }
+          if ((e.ctrlKey || e.metaKey) && hit.type === "embed" && hit.url && /^https?:\/\//i.test(hit.url)) { window.open(hit.url, "_blank", "noopener,noreferrer"); return; }
           setSel(board.expandGroups(selection.current.includes(hit.id) ? selection.current : e.shiftKey ? [...selection.current, hit.id] : [hit.id]));
           gesture = ro ? { kind: "pan", last: { x: e.clientX, y: e.clientY } } : startMove(p);
           if (!ro) board.undo.stopCapturing();
@@ -386,7 +387,12 @@ export function Canvas({ board, tool, readOnly, awareness, onToolDone, apiRef, o
         const r = normaliseRect(g.path[0]!, g.path.at(-1)!);
         setSel(board.expandGroups(board.list().filter((o) => o.type !== "connector" && intersects(r, o)).map((o) => o.id)));
       }
-      if (g.kind === "draw") {
+      if (g.kind === "draw" && toolRef.current === "mindmap") {
+        const root = board.addMindRoot(g.path[0]!);
+        setSel([root.id]);
+        startEdit(root.id);
+        onToolDone?.();
+      } else if (g.kind === "draw") {
         const o = objectForGesture(toolRef.current, g.path, board.list());
         if (o) {
           const made = board.add(o as never);
@@ -422,6 +428,15 @@ export function Canvas({ board, tool, readOnly, awareness, onToolDone, apiRef, o
       const k = e.key.toLowerCase();
       const ro = roRef.current;
       const sel = selection.current;
+      // With a mind map node selected, Tab adds a child, Enter adds a sibling, and Shift+Tab goes to the parent (CNV-15).
+      // Press Escape first to move between objects with Tab instead.
+      const only = sel.length === 1 ? board.get(sel[0]!) : undefined;
+      if (only?.type === "shape" && only.mind && !mod && (e.target === el || (e.target as HTMLElement).tagName === "BODY")) {
+        if (e.key === "Tab" && !e.shiftKey && !ro) { e.preventDefault(); const n = board.addMindChild(only.id); setSel([n.id]); startEdit(n.id); return; }
+        if (e.key === "Tab" && e.shiftKey && only.parentId) { e.preventDefault(); setSel([only.parentId]); return; }
+        if (e.key === "Enter" && !ro) { e.preventDefault(); const n = board.addMindSibling(only.id); setSel([n.id]); startEdit(n.id); return; }
+        if (e.key === "F2" && !ro) { e.preventDefault(); startEdit(only.id); return; }
+      }
       // Tab moves between objects while the canvas has focus, and leaves the canvas after the last one (section 7.3).
       if (e.key === "Tab" && e.target === el && !mod) {
         const order = focusOrder(board.list());
@@ -537,6 +552,8 @@ export function Canvas({ board, tool, readOnly, awareness, onToolDone, apiRef, o
           autoFocus
           defaultValue={editing.text}
           aria-label="Edit object text"
+          // A new mind map root starts with a placeholder, which typing replaces.
+          onFocus={(e) => { if (e.currentTarget.value === "Central idea") e.currentTarget.select(); }}
           style={{ position: "absolute", left: editing.left, top: editing.top, width: editing.width, height: editing.height, font: "16px system-ui", resize: "none" }}
           onBlur={(e) => commit(e.currentTarget.value)}
           onKeyDown={(e) => { if (e.key === "Escape") commit(e.currentTarget.value); }}

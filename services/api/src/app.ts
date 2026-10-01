@@ -6,6 +6,7 @@ import { observe } from "./observability.js";
 import type { GraphClient } from "./graph.js";
 import type { ObjectStore } from "@miroclone/server-core";
 import type { Scanner } from "./scanner.js";
+import type { PreviewDeps } from "./linkpreview.js";
 import { audit } from "./audit.js";
 import { pkceChallenge, pkceVerifier, type OidcClient } from "./oidc.js";
 import { newId, SESSION_COOKIE, SessionManager } from "@miroclone/server-core";
@@ -29,6 +30,8 @@ export interface AppOptions {
   /** Object storage and scanner for file uploads. Uploads are refused unless both exist. */
   store?: ObjectStore;
   scanner?: Scanner;
+  /** Replaces the network calls that link previews make, for tests. */
+  previewDeps?: PreviewDeps;
   /** Key for encrypting Graph tokens in the session store (32 bytes). */
   tokenKey: Buffer;
   txTtlSeconds?: number;

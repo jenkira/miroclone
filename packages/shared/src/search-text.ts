@@ -19,6 +19,12 @@ export function boardText(objs: Iterable<BoardObject>): string {
       case "card":
         for (const v of [o.title, o.description, o.assignee, ...o.tags]) if (v) parts.push(v);
         break;
+      case "table":
+        for (const c of o.cells) if (c) parts.push(c);
+        break;
+      case "embed":
+        for (const v of [o.title, o.name, o.description, o.url]) if (v) parts.push(v);
+        break;
       case "frame":
         if (o.title) parts.push(o.title);
         break;

@@ -5,10 +5,15 @@ import { SESSION_COOKIE } from "./app.js";
 import { db, setup, signIn } from "./testutil.js";
 
 const claims = (oid: string, isAdmin = false): EntraClaims => ({ oid, tid: "t1", name: oid, roles: [isAdmin ? "Whiteboard.Admin" : "Whiteboard.User"], amr: ["mfa"], groups: [] });
-async function user(oid: string, isAdmin = false) {
-  const s = setup(claims(oid, isAdmin));
+async function user(oid: string, isAdmin = false, extra: Parameters<typeof setup>[2] = {}) {
+  const s = setup(claims(oid, isAdmin), { t: 1000 }, extra);
   const cookies = { [SESSION_COOKIE]: (await signIn(s.app)).cookies[0]!.value };
-  return { oid, call: (method: string, url: string, payload?: unknown) => s.app.inject({ method: method as never, url, cookies, payload: payload as never }) };
+  return {
+    oid,
+    call: (method: string, url: string, payload?: unknown) => s.app.inject({ method: method as never, url, cookies, payload: payload as never }),
+    /** A request with its own headers and a raw body, as an upload needs. */
+    raw: (method: string, url: string, payload: Buffer, headers: Record<string, string>) => s.app.inject({ method: method as never, url, cookies, headers, payload }),
+  };
 }
 type U = Awaited<ReturnType<typeof user>>;
 const mk = async (u: U, classification = "OFFICIAL") => (await u.call("POST", "/api/boards", { title: "B", classification })).json().id as string;
@@ -248,5 +253,64 @@ describe("retention and archiving (ADM-4)", () => {
     await owner.call("GET", `/api/boards/${id}`);
     const { rows } = await db.query<{ days: string }>("SELECT extract(day from now() - last_opened_at) AS days FROM boards WHERE id = $1", [id]);
     expect(Number(rows[0]!.days)).toBe(0);
+  });
+});
+
+describe("link previews and PDF uploads (CNV-17)", () => {
+  const page = (title: string) => new Response(`<head><title>${title}</title></head>`, { headers: { "content-type": "text/html" } });
+
+  it("fetches only from hosts an administrator allowed, and only for people who can edit", async () => {
+    const calls: string[] = [];
+    const previewDeps = { fetchImpl: (async (u: string) => { calls.push(u); return page("Handbook"); }) as unknown as typeof fetch, resolve: async () => ["10.0.0.5"] };
+    const admin = await user("lp-admin", true, { previewDeps }), owner = await user("lp-owner", false, { previewDeps }), viewer = await user("lp-viewer", false, { previewDeps });
+    const id = await mk(owner);
+    await share(owner, id, viewer.oid, "viewer");
+    const get = (u: typeof owner, url: string) => u.call("GET", `/api/boards/${id}/link-preview?url=${encodeURIComponent(url)}`);
+
+    // Nothing is allowed at first, so nothing is fetched.
+    expect((await get(owner, "https://wiki.corp.internal/h")).json()).toMatchObject({ title: "wiki.corp.internal", fetched: false });
+    expect(calls).toEqual([]);
+
+    expect((await owner.call("PUT", "/api/admin/link-preview-hosts", ["wiki.corp.internal"])).statusCode).toBe(403);
+    expect((await admin.call("PUT", "/api/admin/link-preview-hosts", ["Wiki.Corp.Internal", "*.docs.internal", "wiki.corp.internal"])).json()).toEqual(["wiki.corp.internal", "*.docs.internal"]);
+    expect((await get(owner, "https://wiki.corp.internal/h")).json()).toMatchObject({ title: "Handbook", fetched: true });
+    expect(calls).toEqual(["https://wiki.corp.internal/h"]);
+    // A repeat comes from the cache.
+    await get(owner, "https://wiki.corp.internal/h");
+    expect(calls).toHaveLength(1);
+
+    expect((await get(owner, "https://example.com/")).json().fetched).toBe(false);
+    expect((await get(viewer, "https://wiki.corp.internal/h")).statusCode).toBe(403);
+    expect((await get(owner, "javascript:alert(1)")).statusCode).toBe(400);
+    await admin.call("PUT", "/api/admin/link-preview-hosts", []);
+  });
+
+  it("refuses host entries that aren't host names", async () => {
+    const admin = await user("lp-admin2", true);
+    for (const bad of ["http://wiki", "wiki/path", "a b", "-x", ""]) expect((await admin.call("PUT", "/api/admin/link-preview-hosts", [bad])).statusCode).toBe(400);
+  });
+
+  it("hides the board from someone with no access", async () => {
+    const owner = await user("lp-owner2"), stranger = await user("lp-stranger");
+    const id = await mk(owner);
+    expect((await stranger.call("GET", `/api/boards/${id}/link-preview?url=https://x.test/`)).statusCode).toBe(404);
+  });
+
+  it("stores a PDF through the upload checks, reports its pages, and refuses an active one", async () => {
+    const files = new Map<string, Uint8Array>();
+    const store = { put: async (k: string, b: Uint8Array) => { files.set(k, b); }, get: async (k: string) => files.get(k), delete: async (k: string) => { files.delete(k); } };
+    const scanner = { scan: async () => ({ clean: true }) };
+    const owner = await user("pdf-owner", false, { store, scanner });
+    const id = await mk(owner);
+    const up = (body: string, type = "application/pdf") => owner.raw("POST", `/api/boards/${id}/files`, Buffer.from(body, "latin1"), { "content-type": type });
+    const good = await up("%PDF-1.4\n1 0 obj << /Type /Pages >> endobj 2 0 obj << /Type /Page >> endobj 3 0 obj << /Type /Page >> endobj\n%%EOF");
+    expect(good.statusCode).toBe(201);
+    expect(good.json()).toMatchObject({ mimeType: "application/pdf", pages: 2 });
+    expect([...files.keys()]).toHaveLength(1);
+    const bad = await up("%PDF-1.4\n1 0 obj << /OpenAction << /S /JavaScript /JS (x) >> >> endobj");
+    expect(bad.statusCode).toBe(422);
+    expect(bad.json()).toMatchObject({ error: "pdf_not_allowed" });
+    expect((await up("%PDF-1.4\n", "image/png")).statusCode).toBe(415);
+    expect(files.size).toBe(1);
   });
 });

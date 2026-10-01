@@ -206,3 +206,83 @@ describe("authors and the view filter (WSH-7)", () => {
     expect(ann.list()).toHaveLength(2);
   });
 });
+
+describe("mind maps (CNV-15)", () => {
+  const fresh = () => new Board(new Y.Doc());
+  const overlap = (a: { x: number; y: number; width: number; height: number }, b: { x: number; y: number; width: number; height: number }) =>
+    a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
+
+  it("starts with a root, and adds children to its right, each joined by a connector", () => {
+    const b = fresh();
+    const root = b.addMindRoot({ x: 0, y: 0 });
+    const a = b.addMindChild(root.id, "A"), c = b.addMindChild(root.id, "B");
+    expect(a).toMatchObject({ parentId: root.id, mind: true, text: "A" });
+    expect(a.x).toBeGreaterThan(root.x + root.width);
+    expect(c.y).toBeGreaterThan(a.y);
+    expect(b.list().filter((o) => o.type === "connector")).toHaveLength(2);
+    expect(b.mindChildren(root.id).map((o) => (o as { text: string }).text)).toEqual(["A", "B"]);
+  });
+
+  it("adds a sibling just below a node, on the same parent, and keeps the nodes from overlapping", () => {
+    const b = fresh();
+    const root = b.addMindRoot({ x: 0, y: 0 });
+    const a = b.addMindChild(root.id, "A");
+    b.addMindChild(root.id, "C");
+    const sib = b.addMindSibling(a.id, "B");
+    expect(sib.parentId).toBe(root.id);
+    expect(b.mindChildren(root.id).map((o) => (o as { text: string }).text)).toEqual(["A", "B", "C"]);
+    const nodes = b.list().filter((o) => o.type === "shape");
+    for (const x of nodes) for (const y of nodes) if (x.id < y.id) expect(overlap(x, y)).toBe(false);
+  });
+
+  it("gives the root a child instead of a sibling", () => {
+    const b = fresh();
+    const root = b.addMindRoot({ x: 0, y: 0 });
+    expect(b.addMindSibling(root.id, "x").parentId).toBe(root.id);
+  });
+
+  it("lays out deeper branches without overlap, with each parent level with its children", () => {
+    const b = fresh();
+    const root = b.addMindRoot({ x: 0, y: 0 });
+    const a = b.addMindChild(root.id, "A"), c = b.addMindChild(root.id, "B");
+    for (let i = 0; i < 4; i++) b.addMindChild(a.id, `a${i}`);
+    b.addMindChild(c.id, "b0");
+    const nodes = b.list().filter((o) => o.type === "shape");
+    for (const x of nodes) for (const y of nodes) if (x.id < y.id) expect(overlap(x, y)).toBe(false);
+    const kids = b.mindChildren(a.id);
+    const mid = (kids[0]!.y + kids.at(-1)!.y + kids.at(-1)!.height) / 2;
+    expect(b.get(a.id)!.y + b.get(a.id)!.height / 2).toBeCloseTo(mid, 0);
+  });
+
+  it("moves a branch with its parent, and deletes a branch with its connectors", () => {
+    const b = fresh();
+    const root = b.addMindRoot({ x: 0, y: 0 });
+    const a = b.addMindChild(root.id, "A");
+    const a1 = b.addMindChild(a.id, "A1");
+    const before = b.get(a1.id)!;
+    b.move([a.id], 100, 50);
+    expect(b.get(a1.id)).toMatchObject({ x: before.x + 100, y: before.y + 50 });
+    b.remove([a.id]);
+    expect(b.get(a.id)).toBeUndefined();
+    expect(b.get(a1.id)).toBeUndefined();
+    expect(b.list().filter((o) => o.type === "connector")).toHaveLength(0);
+    expect(b.get(root.id)).toBeDefined();
+  });
+
+  it("finds the root of a deep node, and refuses a node that isn't in a mind map", () => {
+    const b = fresh();
+    const root = b.addMindRoot({ x: 0, y: 0 });
+    const deep = b.addMindChild(b.addMindChild(root.id).id);
+    expect(b.mindRoot(deep.id)).toBe(root.id);
+    const plain = b.add({ type: "shape", kind: "rectangle" });
+    expect(() => b.addMindChild(plain.id)).toThrow(/mind map/);
+  });
+
+  it("undoes adding a node and its connector in one step", () => {
+    const b = fresh();
+    const root = b.addMindRoot({ x: 0, y: 0 });
+    b.addMindChild(root.id, "A");
+    b.undo.undo();
+    expect(b.list().map((o) => o.type)).toEqual(["shape"]);
+  });
+});

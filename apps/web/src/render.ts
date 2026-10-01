@@ -71,6 +71,46 @@ function drawCard(c: Container, g: Graphics, o: Extract<BoardObject, { type: "ca
   add(o.description, 13, 0x1a1a1a);
 }
 
+/** Draws a link or PDF card with its title, source, and description (CNV-17). */
+function drawEmbed(c: Container, g: Graphics, o: Extract<BoardObject, { type: "embed" }>) {
+  g.roundRect(0, 0, o.width, o.height, 6).fill(0xffffff).stroke({ width: 1, color: 0x9e9e9e });
+  g.rect(0, 0, 6, o.height).fill(o.kind === "pdf" ? 0xc62828 : 0x1565c0);
+  const host = (() => { try { return o.url ? new URL(o.url).host : ""; } catch { return ""; } })();
+  let y = 8;
+  const add = (text: string, size: number, fill: number, bold = false) => {
+    if (!text || y >= o.height - 8) return;
+    const t = new Text({ text, style: { fontSize: size, fontWeight: bold ? "700" : "400", fill, wordWrap: true, wordWrapWidth: o.width - 28, breakWords: true } });
+    if (y + t.height > o.height - 4) { t.destroy(); y = o.height; return; }
+    t.position.set(16, y);
+    c.addChild(t);
+    y += t.height + 4;
+  };
+  add(o.title || o.name || host || (o.kind === "pdf" ? "PDF file" : "Link"), 15, 0x1a1a1a, true);
+  add(o.kind === "pdf" ? `PDF${o.pages ? `, ${o.pages} page${o.pages === 1 ? "" : "s"}` : ""}` : host, 12, 0x1565c0);
+  add(o.description, 12, 0x455a64);
+}
+
+/** Draws a table: a grid, a shaded header row, and the text of each cell, cut to fit (CNV-16). */
+function drawTable(c: Container, g: Graphics, o: Extract<BoardObject, { type: "table" }>) {
+  const cw = o.width / o.cols, ch = o.height / o.rows;
+  g.rect(0, 0, o.width, o.height).fill(0xffffff);
+  if (o.header) g.rect(0, 0, o.width, ch).fill(0xeceff1);
+  for (let i = 1; i < o.cols; i++) g.moveTo(i * cw, 0).lineTo(i * cw, o.height);
+  for (let i = 1; i < o.rows; i++) g.moveTo(0, i * ch).lineTo(o.width, i * ch);
+  g.rect(0, 0, o.width, o.height);
+  g.stroke({ width: 1, color: 0x757575 });
+  for (let r = 0; r < o.rows; r++) for (let col = 0; col < o.cols; col++) {
+    const text = o.cells[r * o.cols + col];
+    if (!text) continue;
+    const t = new Text({ text, style: { fontSize: 13, fontWeight: o.header && r === 0 ? "700" : "400", fill: 0x1a1a1a, wordWrap: true, wordWrapWidth: cw - 12, breakWords: true } });
+    // Cells keep to their own box, so a long entry can't spill into the next cell.
+    const mask = new Graphics().rect(col * cw + 1, r * ch + 1, cw - 2, ch - 2).fill(0xffffff);
+    t.position.set(col * cw + 6, r * ch + 6);
+    t.mask = mask;
+    c.addChild(mask, t);
+  }
+}
+
 export interface Drawn { node: Container; text?: Text }
 
 /** Draws one board object into a display container. */
@@ -101,6 +141,12 @@ export function drawObject(o: BoardObject, board: Board): Drawn {
       break;
     case "card":
       drawCard(c, g, o);
+      break;
+    case "table":
+      drawTable(c, g, o);
+      break;
+    case "embed":
+      drawEmbed(c, g, o);
       break;
     case "shape": {
       const { width: w, height: h } = o;

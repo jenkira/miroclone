@@ -21,6 +21,12 @@ export function FormatBar({ board, selection, readOnly, api }: { board: Board; s
     <div role="toolbar" aria-label="Format and view" style={{ display: "flex", gap: 6, padding: "2px 4px", background: "#fafafa", borderBottom: "1px solid #ddd", alignItems: "center", minHeight: 28 }}>
       <button onClick={() => api.current?.fit()}>Zoom to fit</button>
       <button onClick={() => api.current?.fitSelection()} disabled={selection.length === 0}>Zoom to selection</button>
+      {(() => {
+        const node = selection.length === 1 ? board.get(selection[0]!) : undefined;
+        return node?.type === "shape" && node.mind && !readOnly
+          ? <button title="Tab adds a child, Enter adds a sibling, F2 edits the text" onClick={() => board.tidyMind(board.mindRoot(node.id))}>Tidy mind map</button>
+          : null;
+      })()}
       {first && (
         <>
           <span aria-hidden>|</span>
