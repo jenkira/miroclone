@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import * as Y from "yjs";
-import { clockOffset, formatDuration, timerRemaining, Workshop } from "./workshop-state.js";
+import { clockOffset, formatDuration, freshReactions, isReaction, timerRemaining, Workshop } from "./workshop-state.js";
 
 describe("timer", () => {
   it("counts down to zero and stays there", () => {
@@ -92,5 +92,34 @@ describe("formatDuration", () => {
     expect(formatDuration(61_000)).toBe("1:01");
     expect(formatDuration(3_600_000)).toBe("1:00:00");
     expect(formatDuration(3_725_000)).toBe("1:02:05");
+  });
+});
+
+describe("reactions (WSH-6)", () => {
+  const states = (o: Record<number, unknown>) => new Map(Object.entries(o).map(([k, v]) => [Number(k), v])) as never;
+  it("accepts only the listed emoji", () => {
+    expect(isReaction("👍")).toBe(true);
+    expect(isReaction("<script>")).toBe(false);
+    expect(isReaction("👍👍")).toBe(false);
+  });
+  it("returns each reaction once, with the sender's name", () => {
+    const seen = new Map<number, number>();
+    const s = states({ 2: { user: { name: "Ann" }, reaction: { emoji: "🎉", at: 1000 } } });
+    expect(freshReactions(s, seen, 1500)).toEqual([{ clientId: 2, name: "Ann", emoji: "🎉", at: 1000 }]);
+    expect(freshReactions(s, seen, 1600)).toEqual([]);
+    const again = states({ 2: { user: { name: "Ann" }, reaction: { emoji: "👏", at: 2000 } } });
+    expect(freshReactions(again, seen, 2100)).toHaveLength(1);
+  });
+  it("skips the viewer's own client, junk, and stale reactions", () => {
+    const s = states({
+      1: { reaction: { emoji: "👍", at: 1000 } },
+      2: { reaction: { emoji: "💣", at: 1000 } },
+      3: { reaction: { emoji: "👍", at: "now" } },
+      4: { reaction: { emoji: "👍", at: 1 } },
+      5: { user: { name: "x".repeat(200) }, reaction: { emoji: "👀", at: 100_000 } },
+    });
+    const r = freshReactions(s, new Map(), 100_500, 1);
+    expect(r.map((x) => x.clientId)).toEqual([5]);
+    expect(r[0]!.name).toHaveLength(60);
   });
 });

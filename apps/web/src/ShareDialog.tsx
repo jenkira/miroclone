@@ -4,7 +4,7 @@ import { api, type Member, type Person } from "./api.js";
 import { useClassifications } from "./classifications.js";
 
 /** Lets an owner share a board with people and Entra groups, and change or remove access (IAM-5, IAM-6). */
-export function ShareDialog({ boardId, classification, onClose }: { boardId: string; classification?: string; onClose: () => void }) {
+export function ShareDialog({ boardId, classification, markers = [], onMarkers, onClose }: { boardId: string; classification?: string; markers?: string[]; onMarkers?: (m: string[]) => void; onClose: () => void }) {
   const cfg = useClassifications();
   const level = (k?: string) => cfg.list.find((c) => c.key === k)?.level ?? 0;
   // PROTECTED boards can't be visible to the whole organisation (IAM-8).
@@ -68,6 +68,17 @@ export function ShareDialog({ boardId, classification, onClose }: { boardId: str
             </li>
           ))}
         </ul>
+        {cfg.markers.length > 0 && (
+          <fieldset>
+            <legend>Information management markers and caveats</legend>
+            {cfg.markers.map((m) => (
+              <label key={m.key} style={{ display: "block" }}>
+                <input type="checkbox" checked={markers.includes(m.key)}
+                  onChange={(e) => run(async () => { const next = e.target.checked ? [...markers, m.key] : markers.filter((k) => k !== m.key); const r = await api.setBoardMarkers(boardId, next); onMarkers?.(r.markers); })} />{" "}{m.label}
+              </label>
+            ))}
+          </fieldset>
+        )}
         <h3>Everyone in the organisation</h3>
         <label>Default role{" "}
           <select aria-label="Organisation-wide role" value={orgRole} disabled={protectedBoard}

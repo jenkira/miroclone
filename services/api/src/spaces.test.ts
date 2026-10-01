@@ -149,3 +149,31 @@ describe("thumbnails (BRD-2)", () => {
     expect((await other.call("GET", `/api/boards/${id}/thumbnail`)).statusCode).toBe(404);
   });
 });
+
+describe("markers and caveats (PMK-6)", () => {
+  it("lets an administrator list them, an owner choose them, and returns them with the board", async () => {
+    const admin = await user("mk-admin", true), owner = await user("mk-owner"), other = await user("mk-other");
+    expect((await owner.call("PUT", "/api/admin/markers", [{ key: "X", label: "X" }])).statusCode).toBe(403);
+    expect((await admin.call("PUT", "/api/admin/markers", [{ key: "CABINET", label: "Cabinet" }, { key: "SIC", label: "Staff-in-confidence" }])).statusCode).toBe(200);
+    expect((await other.call("GET", "/api/markers")).json().map((m: { key: string }) => m.key)).toEqual(["CABINET", "SIC"]);
+    const id = await mk(owner, "PROTECTED");
+    expect((await owner.call("PUT", `/api/boards/${id}/markers`, { markers: ["CABINET", "CABINET"] })).json()).toEqual({ markers: ["CABINET"] });
+    expect((await owner.call("GET", `/api/boards/${id}`)).json().markers).toEqual(["CABINET"]);
+    await admin.call("PUT", "/api/admin/markers", [{ key: "CABINET", label: "Cabinet" }, { key: "SIC", label: "Staff-in-confidence" }]);
+  });
+
+  it("refuses an unknown marker, a non-owner, and removing a marker that a board carries", async () => {
+    const admin = await user("mk-admin2", true), owner = await user("mk-owner2"), editor = await user("mk-editor2");
+    await admin.call("PUT", "/api/admin/markers", [{ key: "CABINET", label: "Cabinet" }]);
+    const id = await mk(owner);
+    await share(owner, id, editor.oid, "editor");
+    expect((await owner.call("PUT", `/api/boards/${id}/markers`, { markers: ["NOPE"] })).statusCode).toBe(400);
+    expect((await editor.call("PUT", `/api/boards/${id}/markers`, { markers: ["CABINET"] })).statusCode).toBe(403);
+    await owner.call("PUT", `/api/boards/${id}/markers`, { markers: ["CABINET"] });
+    expect((await admin.call("PUT", "/api/admin/markers", [])).statusCode).toBe(400);
+    await owner.call("PUT", `/api/boards/${id}/markers`, { markers: [] });
+    // The first test's board still carries CABINET, so it stays in the list. Once nothing carries a marker, it can go.
+    expect((await admin.call("PUT", "/api/admin/markers", [{ key: "CABINET", label: "Cabinet" }, { key: "A", label: "A" }])).statusCode).toBe(200);
+    expect((await admin.call("PUT", "/api/admin/markers", [{ key: "CABINET", label: "Cabinet" }, { key: "A", label: "A" }, { key: "A", label: "B" }])).statusCode).toBe(400);
+  });
+});

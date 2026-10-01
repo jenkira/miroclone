@@ -7,6 +7,7 @@ import { api, type BoardSummary, type Me, type Thread } from "./api.js";
 import { Banner } from "./Banner.js";
 import { Canvas, colourFor, type CanvasApi } from "./Canvas.js";
 import { CardBar } from "./CardBar.js";
+import { Reactions } from "./Reactions.js";
 import { Minimap } from "./Minimap.js";
 import { FormatBar } from "./FormatBar.js";
 import { CommentsPanel } from "./CommentsPanel.js";
@@ -15,8 +16,8 @@ import { HistoryPanel } from "./HistoryPanel.js";
 import { Notifications } from "./Notifications.js";
 import { pinsFor } from "./pins.js";
 import { cacheBoard, clearOfflineCache } from "./offline.js";
-import { isDowngrade } from "@miroclone/shared";
-import { useClassifications } from "./classifications.js";
+import { isDowngrade, MAX_CSV_TEXT, notesFromCsv } from "@miroclone/shared";
+import { markerLabel, useClassifications } from "./classifications.js";
 import { ACCEPTED, MAX_BYTES, sizeFor, uploadMessage, useBoardImages } from "./images.js";
 import { ShareDialog } from "./ShareDialog.js";
 import { contentOfSelection } from "./selection.js";
@@ -35,6 +36,7 @@ export function BoardView({ id, me }: { id: string; me: Me }) {
   const [tool, setTool] = useState<Tool>("select");
   const [status, setStatus] = useState<Status>("connecting");
   const apiRef = useRef<CanvasApi | null>(null);
+  const csvInput = useRef<HTMLInputElement>(null);
   // Viewport changes go to the minimap without re-rendering this view on every pan frame.
   const viewSubs = useRef(new Set<(v: Viewport) => void>());
   const subscribeView = useCallback((fn: (v: Viewport) => void) => { viewSubs.current.add(fn); return () => { viewSubs.current.delete(fn); }; }, []);
@@ -95,7 +97,7 @@ export function BoardView({ id, me }: { id: string; me: Me }) {
   const facilitator = meta?.role === "owner" || meta?.role === "editor";
   const w = useWorkshop({ doc: session.doc, board: session.board, awareness: session.provider.awareness ?? undefined, me, canFacilitate: !!facilitator, apiRef });
   const voting = useVoting(id);
-  const { list: markings } = useClassifications();
+  const { list: markings, markers: markerDefs } = useClassifications();
   useEffect(() => { if (import.meta.env.DEV) Object.assign(window, { __apiRef: apiRef }); }, []);
 
   if (error) return <p role="alert">{error}</p>;
@@ -130,6 +132,24 @@ export function BoardView({ id, me }: { id: string; me: Me }) {
   // Pins follow their objects, so they're recomputed when objects change.
   const pins = pinsFor(threads, (oid) => session.board.get(oid));
 
+  /** Adds a sticky note for each row of a CSV file, in a grid around the middle of the view (EXP-4). */
+  const importCsv = async (file: File) => {
+    setNotice("");
+    try {
+      const { notes, skipped, truncated } = notesFromCsv(await file.text());
+      if (!notes.length) { setNotice("The file has no text to import."); return; }
+      const c = apiRef.current?.viewCentre() ?? { x: 0, y: 0 };
+      const cols = Math.min(6, Math.ceil(Math.sqrt(notes.length)));
+      const rows = Math.ceil(notes.length / cols);
+      const added = session.board.addMany(notes.map((n, i) => ({
+        type: "sticky", text: n.text, color: n.color, width: 160, height: 160,
+        x: c.x + (i % cols) * 180 - (cols * 180 - 20) / 2, y: c.y + Math.floor(i / cols) * 180 - (rows * 180 - 20) / 2,
+      })));
+      apiRef.current?.select(added.map((o) => o.id));
+      setNotice(`Added ${added.length} sticky notes.${skipped ? ` ${skipped} rows had no text.` : ""}${truncated ? ` ${truncated} notes were cut to ${MAX_CSV_TEXT} characters.` : ""}`);
+    } catch (e) { setNotice((e as Error).message); }
+  };
+
   /** Uploads images and places each on the board, one after another so they don't overlap. */
   const addImages = async (files: File[], at: { x: number; y: number }) => {
     setNotice("");
@@ -151,7 +171,7 @@ export function BoardView({ id, me }: { id: string; me: Me }) {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100vh", fontFamily: "system-ui" }}>
-      <Banner classification={meta.classification} />
+      <Banner classification={meta.classification} markers={meta.markers} />
       <header style={{ display: "flex", gap: 12, alignItems: "center", padding: "4px 8px" }}>
         <a href="#/">Boards</a>
         <strong>{meta.title}</strong>
@@ -159,17 +179,21 @@ export function BoardView({ id, me }: { id: string; me: Me }) {
         {readOnly && <span>View only</span>}
         {!readOnly && <>
           <button onClick={() => fileInput.current?.click()}>Add image</button>
+          <button onClick={() => csvInput.current?.click()}>Import CSV</button>
+          <input ref={csvInput} type="file" accept=".csv,text/csv" hidden aria-label="Choose a CSV file"
+            onChange={(e) => { const f = e.target.files?.[0]; if (f) void importCsv(f); e.target.value = ""; }} />
           <input ref={fileInput} type="file" accept={ACCEPTED.join(",")} multiple hidden aria-label="Choose images"
             onChange={(e) => { const c = apiRef.current; void addImages([...(e.target.files ?? [])], c ? c.viewCentre() : { x: 0, y: 0 }); e.target.value = ""; }} />
         </>}
         {meta.role === "owner" && <button onClick={() => setSharing(true)}>Share</button>}
-        <ExportMenu board={session.board} title={meta.title} classification={meta.classification} selection={() => apiRef.current?.selection() ?? []}
+        <ExportMenu board={session.board} title={meta.title} classification={meta.classification} markers={(meta.markers ?? []).map((m) => markerLabel(markerDefs, m))} selection={() => apiRef.current?.selection() ?? []}
           authorise={(format, scope) => api.recordExport(id, format, scope) as Promise<void>} loadImage={(fileId) => api.fetchFile(id, fileId)} />
         {canModerate && <button onClick={saveTemplate}>Save as template</button>}
         <button aria-pressed={panel === "voting"} onClick={() => setPanel(panel === "voting" ? null : "voting")}>Voting{voting.open ? " (open)" : ""}</button>
         {!readOnly && <button aria-pressed={panel === "history"} onClick={() => setPanel(panel === "history" ? null : "history")}>History</button>}
         <button aria-pressed={showComments} onClick={() => setShowComments(!showComments)}>Comments{threads.filter((t) => !t.resolved).length ? ` (${threads.filter((t) => !t.resolved).length})` : ""}</button>
         <Notifications />
+        <Reactions awareness={session.provider.awareness ?? undefined} me={me.name} />
         <span style={{ marginLeft: "auto", display: "flex", gap: 4 }} aria-label="People on this board">
           {people.map((p) => (
             <button key={p.id} title={p.id === session.doc.clientID ? "You" : `Go to ${p.name}`} disabled={p.id === session.doc.clientID}
@@ -208,8 +232,8 @@ export function BoardView({ id, me }: { id: string; me: Me }) {
             onSelect={setSelectedThread} onPlaced={() => { setPending(undefined); setTool("select"); }} />
         )}
       </div>
-      <Banner classification={meta.classification} />
-      {sharing && <ShareDialog boardId={id} classification={meta.classification} onClose={() => setSharing(false)} />}
+      <Banner classification={meta.classification} markers={meta.markers} />
+      {sharing && <ShareDialog boardId={id} classification={meta.classification} markers={meta.markers ?? []} onMarkers={(m) => setMeta({ ...meta, markers: m })} onClose={() => setSharing(false)} />}
     </div>
   );
 }

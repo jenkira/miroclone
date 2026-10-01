@@ -165,3 +165,18 @@ describe("alignment", () => {
     expect(distributeX(objs)).toEqual({ o0: 0, o1: 200, o2: 400 });
   });
 });
+
+describe("addMany", () => {
+  it("adds every object in one undo step, in stacking order", () => {
+    const b = new Board(new Y.Doc());
+    b.addMany([{ type: "sticky", text: "a" }, { type: "sticky", text: "b" }, { type: "sticky", text: "c" }]);
+    expect(b.list().map((o) => (o as { text: string }).text)).toEqual(["a", "b", "c"]);
+    b.undo.undo();
+    expect(b.list()).toHaveLength(0);
+  });
+  it("adds nothing when it wouldn't fit", () => {
+    const b = new Board(new Y.Doc());
+    expect(() => b.addMany(Array.from({ length: 20001 }, () => ({ type: "sticky" as const })))).toThrow(/full/);
+    expect(b.list()).toHaveLength(0);
+  });
+});

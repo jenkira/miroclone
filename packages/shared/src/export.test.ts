@@ -137,3 +137,15 @@ describe("cards (CNV-14)", () => {
     expect(boardText([card])).toContain("bug");
   });
 });
+
+describe("markers (PMK-6)", () => {
+  it("adds markers and caveats to both banners, with markup escaped", () => {
+    const svg = exportSvg([], { classification: "PROTECTED", markers: ["Cabinet", "Staff-in-confidence <b>"] });
+    expect((svg.match(/PROTECTED \/\/ Cabinet \/\/ Staff-in-confidence &lt;b&gt;/g) ?? []).length).toBe(2);
+    expect(svg).toContain('data-classification="PROTECTED"');
+  });
+  it("shows only the classification when there are none", () => {
+    const svg = exportSvg([], { classification: "OFFICIAL" });
+    expect(svg).not.toContain(" // ");
+  });
+});

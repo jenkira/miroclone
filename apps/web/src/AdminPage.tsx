@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, type ClassificationConfig, type Marking, type UsageStats } from "./api.js";
+import { api, type ClassificationConfig, type MarkerDef, type Marking, type UsageStats } from "./api.js";
 import { Banner } from "./Banner.js";
 import { MigrationImport } from "./MigrationImport.js";
 
@@ -10,11 +10,14 @@ export function AdminPage() {
   const [stats, setStats] = useState<UsageStats | null>(null);
   const [cfg, setCfg] = useState<ClassificationConfig | null>(null);
   const [message, setMessage] = useState("");
+  const [markers, setMarkers] = useState<MarkerDef[] | null>(null);
+  const [markerMessage, setMarkerMessage] = useState("");
   const [forbidden, setForbidden] = useState(false);
 
   useEffect(() => {
     api.stats().then(setStats).catch((e) => { if (e.status === 403) setForbidden(true); });
     api.classifications().then(setCfg).catch(() => {});
+    api.markers().then(setMarkers).catch(() => {});
   }, []);
 
   if (forbidden) return <main><p role="alert">Only a service administrator can open this page. <a href="#/">Back to boards</a></p></main>;
@@ -80,6 +83,34 @@ export function AdminPage() {
             <button onClick={save}>Save markings</button>
           </p>
           <p role="status">{message}</p>
+        </>
+      )}
+      <h2>Markers and caveats</h2>
+      {markers && (
+        <>
+          <p>If your agency uses information management markers or caveats, list them here. Owners then choose them for each board, and they follow the classification in banners and exports. Leave the list empty if you don't use them.</p>
+          <table>
+            <caption>Table 3. Markers and caveats</caption>
+            <thead><tr><th scope="col">Key</th><th scope="col">Label</th><th scope="col"><span className="sr-only">Remove</span></th></tr></thead>
+            <tbody>
+              {markers.map((m, i) => (
+                <tr key={i}>
+                  <td><input aria-label={`Key of marker ${i + 1}`} value={m.key} onChange={(e) => setMarkers(markers.map((x, j) => (j === i ? { ...x, key: e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, "") } : x)))} style={{ width: 150 }} /></td>
+                  <td><input aria-label={`Label of marker ${m.key}`} value={m.label} onChange={(e) => setMarkers(markers.map((x, j) => (j === i ? { ...x, label: e.target.value } : x)))} /></td>
+                  <td><button onClick={() => setMarkers(markers.filter((_, j) => j !== i))}>Remove {m.key || "marker"}</button></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <p>
+            <button onClick={() => setMarkers([...markers, { key: `MARKER_${markers.length + 1}`, label: "New marker" }])}>Add a marker</button>{" "}
+            <button onClick={async () => {
+              setMarkerMessage("");
+              try { setMarkers(await api.saveMarkerList(markers)); setMarkerMessage("Saved."); }
+              catch { setMarkerMessage("The markers weren't saved. Check that each key is unique and that no marker still on a board was removed."); }
+            }}>Save markers</button>
+          </p>
+          <p role="status">{markerMessage}</p>
         </>
       )}
       {cfg && <MigrationImport markings={cfg.list} fallback={cfg.default} />}

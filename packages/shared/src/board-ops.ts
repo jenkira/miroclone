@@ -52,6 +52,19 @@ export class Board {
     });
   }
 
+  /** Adds many objects as one undo step. Throws before adding any if the board can't hold them all. */
+  addMany(inputs: Input[]): BoardObject[] {
+    if (this.objects.size + inputs.length > MAX_OBJECTS_PER_BOARD) throw new BoardLimitError("Board is full.");
+    return this.step(() => {
+      let last = this.list().at(-1)?.index ?? null;
+      return inputs.map((input) => {
+        const obj = boardObjectSchema.parse({ id: crypto.randomUUID(), x: 0, y: 0, width: 100, height: 100, ...input, index: (last = generateKeyBetween(last, null)) });
+        this.objects.set(obj.id, obj);
+        return obj;
+      });
+    });
+  }
+
   update(id: string, patch: Partial<BoardObject>): void {
     this.tx(() => {
       const cur = this.objects.get(id);

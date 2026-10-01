@@ -15,6 +15,7 @@ export interface VoteState {
   results: { objectId: string; count: number; voters?: string[] }[] | null;
 }
 export interface MigrationResult { id: string; ownerId: string; ownerResolved: boolean; objects: number; images: number; imageProblems: { name: string; reason: string }[] }
+export interface MarkerDef { key: string; label: string }
 export interface Marking { key: string; label: string; level: number; colour: string }
 export interface ClassificationConfig { list: Marking[]; default: string }
 export interface UsageStats {
@@ -23,7 +24,7 @@ export interface UsageStats {
   storage: { documentBytes: number; versionBytes: number; fileBytes: number; fileCount: number };
   activity: { comments: number; templates: number };
 }
-export interface BoardSummary { id: string; title: string; classification: string; role: string; starred: boolean; updated_at: string; space_id?: string | null }
+export interface BoardSummary { id: string; title: string; classification: string; markers?: string[]; role: string; starred: boolean; updated_at: string; space_id?: string | null }
 export interface Space { id: string; name: string; role: string; boards: number }
 
 async function call<T>(method: string, url: string, body?: unknown): Promise<T> {
@@ -93,6 +94,9 @@ export const api = {
   closeVoting: (id: string) => call<VoteState>("POST", `/api/boards/${id}/votes/close`),
   castVote: (id: string, objectId: string) => call<VoteState>("POST", `/api/boards/${id}/votes`, { objectId }),
   removeVote: (id: string, objectId: string) => call<VoteState>("DELETE", `/api/boards/${id}/votes`, { objectId }),
+  markers: () => call<MarkerDef[]>("GET", "/api/markers"),
+  saveMarkerList: (list: MarkerDef[]) => call<MarkerDef[]>("PUT", "/api/admin/markers", list),
+  setBoardMarkers: (id: string, markers: string[]) => call<{ markers: string[] }>("PUT", `/api/boards/${id}/markers`, { markers }),
   classifications: () => call<ClassificationConfig>("GET", "/api/classifications"),
   saveClassifications: (cfg: ClassificationConfig) => call<ClassificationConfig>("PUT", "/api/admin/classifications", cfg),
   stats: () => call<UsageStats>("GET", "/api/admin/stats"),

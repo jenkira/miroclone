@@ -66,8 +66,10 @@ const inFrame = (f: { x: number; y: number; width: number; height: number }, o: 
 type Format = "png" | "svg" | "json" | "pdf";
 
 /** Exports the board, or the current selection, in the browser. `authorise` checks policy and records the audit event first. */
-export function ExportMenu({ board, title, classification, selection, authorise, loadImage }: {
+export function ExportMenu({ board, title, classification, markers = [], selection, authorise, loadImage }: {
   board: Board; title: string; classification: string; selection: () => string[];
+  /** Marker and caveat labels that follow the classification in the banners (PMK-6). */
+  markers?: string[];
   /** Returns an image file's bytes, so the export can embed it. */
   loadImage?: (fileId: string) => Promise<Blob>;
   authorise: (format: Format, scope: string) => Promise<void>;
@@ -99,11 +101,11 @@ export function ExportMenu({ board, title, classification, selection, authorise,
           // Connectors go on a page when both ends are there.
           const here = new Set(a.objs.map((o) => o.id));
           const withLinks = [...a.objs, ...all.filter((o) => o.type === "connector" && here.has(o.from) && here.has(o.to))];
-          pages.push(await svgToJpeg(exportSvg(withLinks, { classification, title: a.label || title, images, bounds: a.bounds }), a.bounds.width, a.bounds.height + 56));
+          pages.push(await svgToJpeg(exportSvg(withLinks, { classification, title: a.label || title, images, bounds: a.bounds, markers }), a.bounds.width, a.bounds.height + 56));
         }
         return download(`${base}.pdf`, new Blob([buildPdf(pages, { title, classification }) as BlobPart], { type: "application/pdf" }));
       }
-      const svg = exportSvg(objs, { classification, title, images });
+      const svg = exportSvg(objs, { classification, title, images, markers });
       if (format === "svg") return download(`${base}.svg`, new Blob([svg], { type: "image/svg+xml" }));
       const b = boundsOf(objs);
       download(`${base}.png`, await svgToPng(svg, b.width, b.height + 56));

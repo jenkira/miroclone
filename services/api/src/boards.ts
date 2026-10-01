@@ -227,3 +227,15 @@ export async function transferOwnership(
     [id, to.id, target.rows[0]!.display_name]);
   return { from: demote };
 }
+
+/** Sets the information management markers and caveats on a board (PMK-6). Owners only, from the configured list. */
+export async function setMarkers(db: Db, actor: Actor, id: string, markers: unknown, validKeys: readonly string[]): Promise<string[]> {
+  await require(db, actor, id, "owner");
+  if (!Array.isArray(markers) || markers.some((m) => typeof m !== "string")) throw new Invalid("markers must be a list of keys");
+  const unique = [...new Set(markers as string[])];
+  if (unique.length > 10) throw new Invalid("A board carries at most 10 markers.");
+  const bad = unique.find((m) => !validKeys.includes(m));
+  if (bad) throw new Invalid(`${bad} isn't a configured marker.`);
+  await db.query("UPDATE boards SET markers = $2 WHERE id = $1", [id, unique]);
+  return unique;
+}

@@ -101,10 +101,12 @@ function shapeMarkup(o: BoardObject, byId: Map<string, BoardObject>, images: Rec
  */
 export function exportSvg(
   objs: readonly BoardObject[],
-  opts: { classification: string; title?: string; bounds?: Bounds; classifications?: readonly Classification[]; images?: Record<string, string> },
+  opts: { classification: string; title?: string; bounds?: Bounds; classifications?: readonly Classification[]; images?: Record<string, string>; markers?: readonly string[] },
 ): string {
   const c = findClassification(opts.classification, opts.classifications);
   const bar = 28;
+  // Markers and caveats follow the classification, as in "PROTECTED // Cabinet" (PMK-6).
+  const markingText = [c.label, ...(opts.markers ?? [])].join(" // ");
   const b = opts.bounds ?? boundsOf(objs);
   const byId = new Map(objs.map((o) => [o.id, o]));
   const rotated = (o: BoardObject) => {
@@ -114,7 +116,7 @@ export function exportSvg(
   const body = [...objs].sort((p, q) => (p.index < q.index ? -1 : 1)).map(rotated).join("");
   const banner = (y: number) =>
     `<rect x="${b.x}" y="${y}" width="${b.width}" height="${bar}" fill="${colour(c.colour, "#000")}"/>` +
-    `<text x="${b.x + b.width / 2}" y="${y + 19}" text-anchor="middle" font-size="16" font-weight="700" font-family="sans-serif" fill="#fff">${esc(c.label)}</text>`;
+    `<text x="${b.x + b.width / 2}" y="${y + 19}" text-anchor="middle" font-size="16" font-weight="700" font-family="sans-serif" fill="#fff">${esc(markingText)}</text>`;
   const top = b.y - bar, h = b.height + bar * 2;
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${b.x} ${top} ${b.width} ${h}" width="${b.width}" height="${h}" data-classification="${esc(c.key)}">` +
     `<title>${esc(opts.title ?? "Board")} (${esc(c.label)})</title>` +

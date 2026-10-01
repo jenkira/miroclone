@@ -14,7 +14,7 @@ import { Conflict, importMigratedBoard } from "./migration.js";
 import * as boards from "./boards.js";
 import * as comments from "./comments.js";
 import * as workshop from "./workshop.js";
-import { loadClassifications, saveClassifications, usageStats, type ClassificationConfig } from "./settings.js";
+import { loadClassifications, loadMarkers, saveClassifications, saveMarkers, usageStats, type ClassificationConfig } from "./settings.js";
 import type { Db } from "@miroclone/server-core";
 import { SESSION_COOKIE, type Session, type SessionManager } from "@miroclone/server-core";
 
@@ -63,6 +63,21 @@ export function boardRoutes(app: FastifyInstance, opts: { db: Db; sessions: Sess
     const adminOnly = (req: FastifyRequest) => { if (!req.session!.isAdmin) throw new boards.Forbidden("Only a service administrator can do this."); };
 
     api.get("/api/classifications", async () => config());
+
+    // Information management markers and caveats (PMK-6). The list is empty until an administrator adds some.
+    api.get("/api/markers", async () => loadMarkers(db));
+    api.put<{ Body: unknown }>("/api/admin/markers", async (req) => {
+      adminOnly(req);
+      const saved = await saveMarkers(db, req.session!.userId, req.body);
+      audit({ action: "settings_change", actor: req.session!.userId, detail: { setting: "markers", markers: saved.map((m) => m.key) } });
+      return saved;
+    });
+    api.put<{ Params: { id: string }; Body: { markers: string[] } }>("/api/boards/:id/markers", async (req) => {
+      const keys = (await loadMarkers(db)).map((m) => m.key);
+      const markers = await boards.setMarkers(db, actorOf(req), req.params.id, req.body?.markers, keys);
+      audit({ action: "classification_change", actor: req.session!.userId, boardId: req.params.id, detail: { markers } });
+      return { markers };
+    });
 
     api.put<{ Body: unknown }>("/api/admin/classifications", async (req) => {
       adminOnly(req);
@@ -172,7 +187,7 @@ export function boardRoutes(app: FastifyInstance, opts: { db: Db; sessions: Sess
     api.get<{ Params: { id: string } }>("/api/boards/:id", async (req) => {
       const role = await boards.roleOnBoard(db, actorOf(req), req.params.id);
       if (!role) throw new boards.NotFound();
-      const { rows } = await db.query("SELECT id, title, classification, updated_at FROM boards WHERE id = $1", [req.params.id]);
+      const { rows } = await db.query("SELECT id, title, classification, markers, updated_at FROM boards WHERE id = $1", [req.params.id]);
       audit({ action: "board_access", actor: req.session!.userId, boardId: req.params.id });
       await comments.recordParticipant(db, req.params.id, req.session!.userId);
       return { ...rows[0], role };

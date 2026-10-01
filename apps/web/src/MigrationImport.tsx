@@ -64,7 +64,7 @@ export function MigrationImport({ markings, fallback }: { markings: Marking[]; f
       {rows.length > 0 && (
         <>
           <table>
-            <caption>Table 3. Boards to import</caption>
+            <caption>Table 4. Boards to import</caption>
             <thead><tr><th scope="col">Import</th><th scope="col">Board</th><th scope="col">Owner email</th><th scope="col">Classification</th><th scope="col">Items</th><th scope="col">Result</th></tr></thead>
             <tbody>
               {rows.map((r, i) => (

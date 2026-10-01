@@ -59,3 +59,38 @@ export function formatDuration(ms: number): string {
 export function clockOffset(sentAt: number, serverNow: number, receivedAt: number): number {
   return serverNow - (sentAt + receivedAt) / 2;
 }
+
+/** The reactions a participant can send (WSH-6). A fixed list keeps arbitrary text out of other people's screens. */
+export const REACTIONS = [
+  { emoji: "👍", label: "Thumbs up" }, { emoji: "👏", label: "Applause" }, { emoji: "❤️", label: "Heart" },
+  { emoji: "🎉", label: "Celebrate" }, { emoji: "🤔", label: "Thinking" }, { emoji: "👀", label: "Eyes" },
+] as const;
+
+export const isReaction = (v: unknown): v is (typeof REACTIONS)[number]["emoji"] => REACTIONS.some((r) => r.emoji === v);
+
+/** How long a reaction stays on screen, in milliseconds. */
+export const REACTION_TTL_MS = 4000;
+
+export interface ReactionEvent { clientId: number; name: string; emoji: string; at: number }
+
+/**
+ * Finds the reactions in awareness states that the viewer hasn't shown yet. `seen` maps each client to the time of the
+ * last reaction shown, so a reaction shows once. Reactions older than the time to live, from the future, or with an
+ * emoji outside the list are dropped. `skip` is the viewer's own client, whose reactions show locally.
+ */
+export function freshReactions(
+  states: ReadonlyMap<number, { user?: { name?: string }; reaction?: { emoji?: unknown; at?: unknown } }>,
+  seen: Map<number, number>, now: number, skip?: number,
+): ReactionEvent[] {
+  const out: ReactionEvent[] = [];
+  for (const [clientId, s] of states) {
+    const r = s.reaction;
+    if (clientId === skip || !r || typeof r.at !== "number" || !isReaction(r.emoji)) continue;
+    // Other people's clocks can differ, so allow some drift before calling a time stale or in the future.
+    if (r.at <= (seen.get(clientId) ?? 0)) continue;
+    seen.set(clientId, r.at);
+    if (Math.abs(now - r.at) > REACTION_TTL_MS * 4) continue;
+    out.push({ clientId, name: String(s.user?.name ?? "Someone").slice(0, 60), emoji: r.emoji, at: r.at });
+  }
+  return out;
+}

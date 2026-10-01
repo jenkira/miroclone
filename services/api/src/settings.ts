@@ -44,6 +44,35 @@ export async function saveClassifications(db: Db, userId: string, input: unknown
   return cfg;
 }
 
+export interface Marker { key: string; label: string }
+
+const markerEntry = z.object({
+  key: z.string().regex(/^[A-Z0-9_]{1,40}$/, "Keys use capital letters, digits, and underscores."),
+  label: z.string().trim().min(1).max(60),
+});
+
+/** Reads the information management markers and caveats the agency uses (PMK-6). The list starts empty. */
+export async function loadMarkers(db: Db): Promise<Marker[]> {
+  const { rows } = await db.query<{ value: Marker[] }>("SELECT value FROM settings WHERE key = 'markers'");
+  return rows[0]?.value ?? [];
+}
+
+/** Saves the marker list. A marker that a board still carries can't be removed. */
+export async function saveMarkers(db: Db, userId: string, input: unknown): Promise<Marker[]> {
+  const parsed = z.array(markerEntry).max(30).safeParse(input);
+  if (!parsed.success) throw new Invalid(parsed.error.issues[0]?.message ?? "That list isn't valid.");
+  const keys = parsed.data.map((m) => m.key);
+  if (new Set(keys).size !== keys.length) throw new Invalid("Each marker needs its own key.");
+  const used = await db.query<{ key: string; n: string }>("SELECT m AS key, count(*) AS n FROM boards, unnest(markers) AS m GROUP BY m");
+  for (const u of used.rows) {
+    if (!keys.includes(u.key)) throw new Invalid(`${u.key} is on ${u.n} board${u.n === "1" ? "" : "s"}, so it can't be removed.`);
+  }
+  await db.query(
+    `INSERT INTO settings (key, value, updated_by) VALUES ('markers', $1, $2)
+     ON CONFLICT (key) DO UPDATE SET value = $1, updated_by = $2, updated_at = now()`, [JSON.stringify(parsed.data), userId]);
+  return parsed.data;
+}
+
 export interface UsageStats {
   users: { total: number; activeLast7Days: number; activeLast30Days: number };
   boards: { total: number; inRecycleBin: number; byClassification: { classification: string; count: number }[] };
