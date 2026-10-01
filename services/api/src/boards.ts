@@ -1,0 +1,255 @@
+import {
+  atLeast, compareClassification, defaultClassifications,
+  validateClassificationChange, type Classification,
+  type BoardRole,
+} from "@miroclone/shared";
+import { RECYCLE_DAYS, roleOnBoard, type Actor, type Db } from "@miroclone/server-core";
+
+export { RECYCLE_DAYS, roleOnBoard, type Actor };
+
+export interface BoardRow {
+  id: string;
+  title: string;
+  classification: string;
+  created_by: string;
+  updated_at: string;
+  deleted_at: string | null;
+  role: BoardRole;
+  starred: boolean;
+  space_id: string | null;
+  archived_at: string | null;
+}
+
+
+export class Forbidden extends Error {}
+export class NotFound extends Error {}
+export class Invalid extends Error {}
+
+export async function upsertUser(
+  db: Db,
+  u: { id: string; tenantId: string; name: string; email?: string },
+) {
+  await db.query(
+    `INSERT INTO users (id, tenant_id, display_name, email) VALUES ($1, $2, $3, $4)
+     ON CONFLICT (id) DO UPDATE SET display_name = $3, email = $4, last_sign_in_at = now()`,
+    [u.id, u.tenantId, u.name, u.email ?? null],
+  );
+}
+
+async function require(db: Db, actor: Actor, boardId: string, min: BoardRole): Promise<BoardRole> {
+  const role = await roleOnBoard(db, actor, boardId);
+  // A board the user can't open looks the same as a missing board.
+  if (!role) throw new NotFound();
+  if (!atLeast(role, min)) throw new Forbidden();
+  return role;
+}
+
+export async function createBoard(db: Db, actor: Actor, title: string, classification: string): Promise<string> {
+  if (!title.trim()) throw new Invalid("title is required");
+  const { rows } = await db.query<{ id: string }>(
+    "INSERT INTO boards (title, classification, created_by) VALUES ($1, $2, $3) RETURNING id",
+    [title.trim(), classification, actor.id],
+  );
+  const id = rows[0]!.id;
+  await db.query("INSERT INTO board_members VALUES ($1, 'user', $2, 'owner')", [id, actor.id]);
+  return id;
+}
+
+export type BoardFilter = "recent" | "owned" | "shared" | "starred" | "deleted" | "archived";
+
+/** Lists the boards a user can open, for the dashboard (BRD-2). */
+export async function listBoards(db: Db, actor: Actor, filter: BoardFilter = "recent"): Promise<BoardRow[]> {
+  const { rows } = await db.query<BoardRow>(
+    `SELECT b.id, b.title, b.classification, b.created_by, b.updated_at, b.deleted_at, b.space_id, b.archived_at,
+            (SELECT role FROM (
+               SELECT m.role, CASE m.role WHEN 'owner' THEN 4 WHEN 'editor' THEN 3 WHEN 'commenter' THEN 2 ELSE 1 END AS r
+               FROM board_access m WHERE m.board_id = b.id AND (
+                 (m.principal_type = 'user' AND m.principal_id = $1) OR
+                 (m.principal_type = 'group' AND m.principal_id = ANY($2::text[])))
+               ORDER BY r DESC LIMIT 1) x) AS role,
+            EXISTS (SELECT 1 FROM board_stars s WHERE s.board_id = b.id AND s.user_id = $1) AS starred
+     FROM boards b
+     -- Boards shared with the whole organisation reach people through search and links, not every dashboard.
+     WHERE EXISTS (SELECT 1 FROM board_access m WHERE m.board_id = b.id AND (
+             (m.principal_type = 'user' AND m.principal_id = $1) OR
+             (m.principal_type = 'group' AND m.principal_id = ANY($2::text[]))))
+       AND ${filter === "deleted" ? "b.deleted_at IS NOT NULL AND b.created_by = $1" : filter === "archived" ? "b.deleted_at IS NULL AND b.archived_at IS NOT NULL" : "b.deleted_at IS NULL AND b.archived_at IS NULL"}
+     ORDER BY b.updated_at DESC`,
+    [actor.id, actor.groups],
+  );
+  return rows.filter((b) =>
+    filter === "owned" ? b.role === "owner"
+    : filter === "shared" ? b.role !== "owner"
+    : filter === "starred" ? b.starred
+    : true);
+}
+
+export async function renameBoard(db: Db, actor: Actor, id: string, title: string) {
+  await require(db, actor, id, "editor");
+  if (!title.trim()) throw new Invalid("title is required");
+  await db.query("UPDATE boards SET title = $2, updated_at = now() WHERE id = $1", [id, title.trim()]);
+}
+
+/** Moves a board to the recycle bin (BRD-1). Only owners can delete. */
+export async function deleteBoard(db: Db, actor: Actor, id: string) {
+  // An owner can delete a board that is archived, so the check ignores the archive.
+  const role = await roleOnBoard(db, actor, id, { ignoreArchive: true });
+  if (!role) throw new NotFound();
+  if (!atLeast(role, "owner")) throw new Forbidden();
+  await db.query("UPDATE boards SET deleted_at = now() WHERE id = $1", [id]);
+}
+
+export async function restoreBoard(db: Db, actor: Actor, id: string) {
+  const { rows } = await db.query(
+    "UPDATE boards SET deleted_at = NULL WHERE id = $1 AND created_by = $2 AND deleted_at IS NOT NULL RETURNING id",
+    [id, actor.id],
+  );
+  if (!rows.length) throw new NotFound();
+}
+
+/** Permanently removes boards that have been in the recycle bin too long. */
+export async function purgeExpired(db: Db): Promise<number> {
+  const { rows } = await db.query(
+    `DELETE FROM boards WHERE deleted_at < now() - ($1 || ' days')::interval RETURNING id`,
+    [String(RECYCLE_DAYS)],
+  );
+  return rows.length;
+}
+
+export async function share(
+  db: Db, actor: Actor, id: string,
+  p: { type: "user" | "group"; id: string; role: BoardRole; name?: string },
+) {
+  await require(db, actor, id, "owner");
+  await db.query(
+    `INSERT INTO board_members (board_id, principal_type, principal_id, role, principal_name) VALUES ($1, $2, $3, $4, $5)
+     ON CONFLICT (board_id, principal_type, principal_id) DO UPDATE SET role = $4, principal_name = COALESCE($5, board_members.principal_name)`,
+    [id, p.type, p.id, p.role, p.name ?? null],
+  );
+}
+
+export interface MemberRow { type: "user" | "group"; id: string; name: string; role: BoardRole }
+
+/** Lists who can open a board. Any member can see the list. */
+export async function listMembers(db: Db, actor: Actor, id: string): Promise<MemberRow[]> {
+  await require(db, actor, id, "viewer");
+  const { rows } = await db.query<MemberRow>(
+    `SELECT m.principal_type AS type, m.principal_id AS id, m.role,
+            COALESCE(m.principal_name, u.display_name, m.principal_id) AS name
+     FROM board_members m LEFT JOIN users u ON m.principal_type = 'user' AND u.id = m.principal_id
+     WHERE m.board_id = $1 ORDER BY m.role DESC, name`, [id]);
+  return rows;
+}
+
+export async function unshare(db: Db, actor: Actor, id: string, p: { type: "user" | "group"; id: string }) {
+  await require(db, actor, id, "owner");
+  const { rows } = await db.query<{ n: string }>(
+    "SELECT count(*) AS n FROM board_members WHERE board_id = $1 AND role = 'owner'", [id]);
+  const target = await db.query<{ role: string }>(
+    "SELECT role FROM board_members WHERE board_id = $1 AND principal_type = $2 AND principal_id = $3",
+    [id, p.type, p.id]);
+  if (target.rows[0]?.role === "owner" && Number(rows[0]!.n) <= 1) throw new Invalid("A board needs an owner.");
+  await db.query("DELETE FROM board_members WHERE board_id = $1 AND principal_type = $2 AND principal_id = $3", [id, p.type, p.id]);
+}
+
+/** Changes a board's classification (PMK-3). Returns the previous value for the audit log. */
+export async function setClassification(
+  db: Db, actor: Actor, id: string, to: string,
+  opts: { confirmed?: boolean; reason?: string },
+  list?: readonly Classification[],
+): Promise<{ from: string; to: string }> {
+  await require(db, actor, id, "owner");
+  const { rows } = await db.query<{ classification: string }>("SELECT classification FROM boards WHERE id = $1", [id]);
+  const from = rows[0]!.classification;
+  const check = validateClassificationChange(from, to, opts, list);
+  if (!check.ok) throw new Invalid(check.error);
+  await db.query("UPDATE boards SET classification = $2, updated_at = now() WHERE id = $1", [id, to]);
+  // Raising a board to PROTECTED ends organisation-wide visibility (IAM-8).
+  if (blocksOrgVisibility(to, list)) await db.query("UPDATE boards SET org_visibility = NULL WHERE id = $1", [id]);
+  return { from, to };
+}
+
+export async function setStar(db: Db, actor: Actor, id: string, starred: boolean) {
+  await require(db, actor, id, "viewer");
+  if (starred) await db.query("INSERT INTO board_stars VALUES ($1, $2) ON CONFLICT DO NOTHING", [id, actor.id]);
+  else await db.query("DELETE FROM board_stars WHERE board_id = $1 AND user_id = $2", [id, actor.id]);
+}
+
+/** True for PROTECTED and above. Those boards can't be visible to the whole organisation (IAM-8). */
+export function blocksOrgVisibility(classification: string, list: readonly Classification[] = defaultClassifications): boolean {
+  return compareClassification(classification, "PROTECTED", list) >= 0;
+}
+
+/** Makes a board visible to everyone in the organisation with a default role, or turns that off (IAM-8). */
+export async function setOrgVisibility(
+  db: Db, actor: Actor, id: string, role: "viewer" | "commenter" | "editor" | null,
+  list?: readonly Classification[],
+) {
+  await require(db, actor, id, "owner");
+  if (role !== null && !["viewer", "commenter", "editor"].includes(role)) throw new Invalid("bad role");
+  const { rows } = await db.query<{ classification: string }>("SELECT classification FROM boards WHERE id = $1", [id]);
+  if (role && blocksOrgVisibility(rows[0]!.classification, list)) {
+    throw new Invalid("A PROTECTED board can't be visible to the whole organisation.");
+  }
+  await db.query("UPDATE boards SET org_visibility = $2 WHERE id = $1", [id, role]);
+}
+
+export async function getOrgVisibility(db: Db, actor: Actor, id: string): Promise<string | null> {
+  await require(db, actor, id, "viewer");
+  const { rows } = await db.query<{ org_visibility: string | null }>("SELECT org_visibility FROM boards WHERE id = $1", [id]);
+  return rows[0]!.org_visibility;
+}
+
+/**
+ * Makes another person the owner of a board (BRD-5). The previous owner becomes an editor.
+ * An owner transfers their own board, and a service administrator reassigns any board when an owner leaves.
+ */
+export async function transferOwnership(
+  db: Db, actor: Actor & { isAdmin?: boolean }, id: string, to: { id: string; name?: string },
+): Promise<{ from: string[] }> {
+  if (actor.isAdmin) {
+    const { rows } = await db.query("SELECT 1 FROM boards WHERE id = $1 AND deleted_at IS NULL", [id]);
+    if (!rows.length) throw new NotFound();
+  } else {
+    await require(db, actor, id, "owner");
+  }
+  const target = await db.query<{ display_name: string }>("SELECT display_name FROM users WHERE id = $1", [to.id]);
+  if (!target.rows.length) throw new Invalid("That person hasn't signed in to Miroclone yet.");
+  const owners = await db.query<{ principal_id: string }>(
+    "SELECT principal_id FROM board_members WHERE board_id = $1 AND role = 'owner' AND principal_type = 'user'", [id]);
+  const from = owners.rows.map((r) => r.principal_id).filter((o) => o !== to.id);
+  // A non-admin hands over their own ownership only. Other owners stay.
+  const demote = actor.isAdmin ? from : from.filter((o) => o === actor.id);
+  if (demote.length) {
+    await db.query(
+      "UPDATE board_members SET role = 'editor' WHERE board_id = $1 AND principal_type = 'user' AND principal_id = ANY($2::text[])",
+      [id, demote]);
+  }
+  await db.query(
+    `INSERT INTO board_members (board_id, principal_type, principal_id, role, principal_name) VALUES ($1, 'user', $2, 'owner', $3)
+     ON CONFLICT (board_id, principal_type, principal_id) DO UPDATE SET role = 'owner'`,
+    [id, to.id, target.rows[0]!.display_name]);
+  return { from: demote };
+}
+
+/** Sets the information management markers and caveats on a board (PMK-6). Owners only, from the configured list. */
+export async function setMarkers(db: Db, actor: Actor, id: string, markers: unknown, validKeys: readonly string[]): Promise<string[]> {
+  await require(db, actor, id, "owner");
+  if (!Array.isArray(markers) || markers.some((m) => typeof m !== "string")) throw new Invalid("markers must be a list of keys");
+  const unique = [...new Set(markers as string[])];
+  if (unique.length > 10) throw new Invalid("A board carries at most 10 markers.");
+  const bad = unique.find((m) => !validKeys.includes(m));
+  if (bad) throw new Invalid(`${bad} isn't a configured marker.`);
+  await db.query("UPDATE boards SET markers = $2 WHERE id = $1", [id, unique]);
+  return unique;
+}
+
+/** Archives a board by hand, or restores it (ADM-4). Only an owner can, and restoring starts the retention clock again. */
+export async function setArchived(db: Db, actor: Actor, id: string, archived: boolean) {
+  const role = await roleOnBoard(db, actor, id, { ignoreArchive: true });
+  if (!role) throw new NotFound();
+  if (!atLeast(role, "owner")) throw new Forbidden();
+  await db.query(
+    archived ? "UPDATE boards SET archived_at = COALESCE(archived_at, now()) WHERE id = $1"
+             : "UPDATE boards SET archived_at = NULL, last_opened_at = now() WHERE id = $1", [id]);
+}

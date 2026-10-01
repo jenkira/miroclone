@@ -1,0 +1,187 @@
+import { z } from "zod";
+import { boardObjectSchema, isSafeLink, isWebLink, MAX_OBJECTS_PER_BOARD, type BoardObject } from "./objects.js";
+import { formatDue, listLines, wrapText } from "./text.js";
+import { findClassification, type Classification } from "./classification.js";
+
+const esc = (s: string) =>
+  s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+/** Colours come from user data, so only accept hex values in exported markup. */
+const colour = (c: string, fallback: string) => (/^#[0-9a-fA-F]{3,8}$/.test(c) ? c : fallback);
+
+export interface Bounds { x: number; y: number; width: number; height: number }
+
+/** The box around an object after rotation about its centre. */
+export function rotatedExtent(o: { x: number; y: number; width: number; height: number; rotation: number }): Bounds {
+  if (!o.rotation) return { x: o.x, y: o.y, width: o.width, height: o.height };
+  const a = (o.rotation * Math.PI) / 180;
+  const cos = Math.abs(Math.cos(a)), sin = Math.abs(Math.sin(a));
+  const w = o.width * cos + o.height * sin, h = o.width * sin + o.height * cos;
+  return { x: o.x + o.width / 2 - w / 2, y: o.y + o.height / 2 - h / 2, width: w, height: h };
+}
+
+/** The box around the given objects, including rotation. Connectors follow their objects, so they add nothing. */
+export function boundsOf(objs: readonly BoardObject[], pad = 40): Bounds {
+  const boxes = objs.filter((o) => o.type !== "connector").map(rotatedExtent);
+  if (!boxes.length) return { x: 0, y: 0, width: 400, height: 300 };
+  const x = Math.min(...boxes.map((b) => b.x)), y = Math.min(...boxes.map((b) => b.y));
+  const r = Math.max(...boxes.map((b) => b.x + b.width)), b = Math.max(...boxes.map((b) => b.y + b.height));
+  return { x: x - pad, y: y - pad, width: r - x + pad * 2, height: b - y + pad * 2 };
+}
+
+/** An inline raster or SVG image, as the export embeds it. Anything else isn't embedded. */
+const DATA_IMAGE = /^data:image\/(?:png|jpeg|gif|webp|svg\+xml);base64,[A-Za-z0-9+/=]+$/;
+
+function shapeMarkup(o: BoardObject, byId: Map<string, BoardObject>, images: Record<string, string>): string {
+  const t = (text: string) => text
+    ? `<text x="${o.x + 8}" y="${o.y + 24}" font-size="16" font-family="sans-serif" fill="#1a1a1a">${esc(text)}</text>` : "";
+  switch (o.type) {
+    case "sticky":
+      return `<rect x="${o.x}" y="${o.y}" width="${o.width}" height="${o.height}" fill="${colour(o.color, "#fff475")}" stroke="#bdbdbd"/>${t(o.text)}`;
+    case "embed": {
+      const chars = Math.max(8, Math.floor((o.width - 24) / 8));
+      const host = o.url ? (() => { try { return new URL(o.url).host; } catch { return ""; } })() : "";
+      const lines: { text: string; bold?: boolean; fill?: string; size: number }[] = [];
+      for (const l of wrapText(o.title || o.name || host || (o.kind === "pdf" ? "PDF file" : "Link"), chars)) lines.push({ text: l, bold: true, size: 15 });
+      lines.push({ text: o.kind === "pdf" ? `PDF${o.pages ? `, ${o.pages} page${o.pages === 1 ? "" : "s"}` : ""}` : host, size: 12, fill: "#1565c0" });
+      for (const l of wrapText(o.description, chars)) lines.push({ text: l, size: 12 });
+      let y = o.y + 8;
+      const rows: string[] = [];
+      for (const l of lines) {
+        y += l.size * 1.3;
+        if (y > o.y + o.height - 4) break;
+        rows.push(`<text x="${o.x + 12}" y="${y}" font-size="${l.size}" font-family="sans-serif" font-weight="${l.bold ? 700 : 400}" fill="${l.fill ?? "#1a1a1a"}">${esc(l.text)}</text>`);
+      }
+      const card = `<rect x="${o.x}" y="${o.y}" width="${o.width}" height="${o.height}" rx="6" fill="#fff" stroke="#9e9e9e"/>` + rows.join("");
+      // A link in an SVG is only kept when it's a web address, as for text links.
+      return o.url && isWebLink(o.url) ? `<a href="${esc(o.url)}">${card}</a>` : card;
+    }
+    case "table": {
+      const cw = o.width / o.cols, ch = o.height / o.rows;
+      const parts = [`<rect x="${o.x}" y="${o.y}" width="${o.width}" height="${o.height}" fill="#fff" stroke="#757575"/>`];
+      if (o.header) parts.push(`<rect x="${o.x}" y="${o.y}" width="${o.width}" height="${ch}" fill="#eceff1" stroke="#757575"/>`);
+      for (let c = 1; c < o.cols; c++) parts.push(`<line x1="${o.x + c * cw}" y1="${o.y}" x2="${o.x + c * cw}" y2="${o.y + o.height}" stroke="#9e9e9e"/>`);
+      for (let r = 1; r < o.rows; r++) parts.push(`<line x1="${o.x}" y1="${o.y + r * ch}" x2="${o.x + o.width}" y2="${o.y + r * ch}" stroke="#9e9e9e"/>`);
+      const chars = Math.max(3, Math.floor((cw - 12) / 7.5)), maxLines = Math.max(1, Math.floor((ch - 8) / 16));
+      for (let r = 0; r < o.rows; r++) for (let c = 0; c < o.cols; c++) {
+        const text = o.cells[r * o.cols + c];
+        if (!text) continue;
+        wrapText(text, chars).slice(0, maxLines).forEach((line, i) => parts.push(
+          `<text x="${o.x + c * cw + 6}" y="${o.y + r * ch + 18 + i * 16}" font-size="13" font-family="sans-serif" font-weight="${o.header && r === 0 ? 700 : 400}" fill="#1a1a1a">${esc(line)}</text>`));
+      }
+      return parts.join("");
+    }
+    case "card": {
+      const chars = Math.max(8, Math.floor((o.width - 24) / 8));
+      const lines: { text: string; bold?: boolean; fill?: string; size: number }[] = [];
+      for (const l of wrapText(o.title || "Untitled card", chars)) lines.push({ text: l, bold: true, size: 16 });
+      const meta = [o.assignee && `Assigned to ${o.assignee}`, o.due && `Due ${formatDue(o.due)}`].filter(Boolean).join("  ·  ");
+      if (meta) lines.push({ text: meta, size: 12, fill: "#455a64" });
+      if (o.tags.length) lines.push({ text: o.tags.map((t) => `#${t}`).join(" "), size: 12, fill: "#1565c0" });
+      if (o.description) for (const l of wrapText(o.description, chars)) lines.push({ text: l, size: 13 });
+      let y = o.y + 8;
+      const rows: string[] = [];
+      for (const l of lines) {
+        y += l.size * 1.3;
+        if (y > o.y + o.height - 4) break;
+        rows.push(`<text x="${o.x + 12}" y="${y}" font-size="${l.size}" font-family="sans-serif" font-weight="${l.bold ? 700 : 400}" fill="${l.fill ?? "#1a1a1a"}">${esc(l.text)}</text>`);
+      }
+      return `<rect x="${o.x}" y="${o.y}" width="${o.width}" height="${o.height}" rx="6" fill="${colour(o.color, "#fff")}" stroke="#9e9e9e"/>` + rows.join("");
+    }
+    case "shape": {
+      const fill = colour(o.fill, "#fff"), stroke = colour(o.stroke, "#1a1a1a");
+      const a = `fill="${fill}" stroke="${stroke}" stroke-width="2"`;
+      const cx = o.x + o.width / 2, cy = o.y + o.height / 2, r = o.x + o.width, b = o.y + o.height;
+      const body = o.kind === "ellipse" ? `<ellipse cx="${cx}" cy="${cy}" rx="${o.width / 2}" ry="${o.height / 2}" ${a}/>`
+        : o.kind === "triangle" ? `<polygon points="${cx},${o.y} ${r},${b} ${o.x},${b}" ${a}/>`
+        : o.kind === "diamond" ? `<polygon points="${cx},${o.y} ${r},${cy} ${cx},${b} ${o.x},${cy}" ${a}/>`
+        : `<rect x="${o.x}" y="${o.y}" width="${o.width}" height="${o.height}" rx="${o.kind === "rounded" ? 12 : 0}" ${a}/>`;
+      return body + t(o.text);
+    }
+    case "text": {
+      const lines = listLines(o.text, o.list);
+      const anchor = o.align === "center" ? "middle" : o.align === "right" ? "end" : "start";
+      const x = o.align === "center" ? o.x + o.width / 2 : o.align === "right" ? o.x + o.width - 8 : o.x + 8;
+      const deco = o.underline || o.link ? ' text-decoration="underline"' : "";
+      const fill = o.link ? "#1565c0" : colour(o.color, "#1a1a1a");
+      const spans = lines.map((l, i) => `<tspan x="${x}" dy="${i === 0 ? 0 : o.size * 1.25}">${esc(l)}</tspan>`).join("");
+      const text = `<text x="${x}" y="${o.y + o.size + 4}" font-size="${o.size}" font-family="sans-serif" font-weight="${o.bold ? 700 : 400}" font-style="${o.italic ? "italic" : "normal"}" text-anchor="${anchor}" fill="${fill}"${deco}>${spans}</text>`;
+      return o.link && isSafeLink(o.link) ? `<a href="${esc(o.link)}">${text}</a>` : text;
+    }
+    case "stroke": {
+      const pts: string[] = [];
+      for (let i = 0; i + 1 < o.points.length; i += 2) pts.push(`${o.x + o.points[i]!},${o.y + o.points[i + 1]!}`);
+      return `<polyline points="${pts.join(" ")}" fill="none" stroke="${colour(o.color, "#1a1a1a")}" stroke-width="${o.highlighter ? 14 : 3}" stroke-opacity="${o.highlighter ? 0.4 : 1}" stroke-linecap="round" stroke-linejoin="round"/>`;
+    }
+    case "frame":
+      return `<rect x="${o.x}" y="${o.y}" width="${o.width}" height="${o.height}" fill="#fff" fill-opacity="0.4" stroke="#607d8b" stroke-width="2"/><text x="${o.x}" y="${o.y - 6}" font-size="14" font-family="sans-serif" fill="#455a64">${esc(o.title)}</text>`;
+    case "connector": {
+      const a = byId.get(o.from), b = byId.get(o.to);
+      if (!a || !b) return "";
+      return `<line x1="${a.x + a.width / 2}" y1="${a.y + a.height / 2}" x2="${b.x + b.width / 2}" y2="${b.y + b.height / 2}" stroke="#1a1a1a" stroke-width="2"/>`;
+    }
+    case "image": {
+      const uri = images[o.objectKey];
+      if (uri && DATA_IMAGE.test(uri)) return `<image href="${uri}" x="${o.x}" y="${o.y}" width="${o.width}" height="${o.height}" preserveAspectRatio="none"/>`;
+      // Without the bytes, an export shows a placeholder.
+      return `<rect x="${o.x}" y="${o.y}" width="${o.width}" height="${o.height}" fill="#eee" stroke="#9e9e9e"/>`;
+    }
+  }
+}
+
+/**
+ * Builds an SVG with the classification in a header and footer and in the file's metadata (PMK-4).
+ * Everything user-supplied is escaped, and no script or external reference is emitted (section 7.4).
+ */
+export function exportSvg(
+  objs: readonly BoardObject[],
+  opts: { classification: string; title?: string; bounds?: Bounds; classifications?: readonly Classification[]; images?: Record<string, string>; markers?: readonly string[] },
+): string {
+  const c = findClassification(opts.classification, opts.classifications);
+  const bar = 28;
+  // Markers and caveats follow the classification, as in "PROTECTED // Cabinet" (PMK-6).
+  const markingText = [c.label, ...(opts.markers ?? [])].join(" // ");
+  const b = opts.bounds ?? boundsOf(objs);
+  const byId = new Map(objs.map((o) => [o.id, o]));
+  const rotated = (o: BoardObject) => {
+    const m = shapeMarkup(o, byId, opts.images ?? {});
+    return o.rotation && o.type !== "connector" ? `<g transform="rotate(${Number(o.rotation)} ${o.x + o.width / 2} ${o.y + o.height / 2})">${m}</g>` : m;
+  };
+  const body = [...objs].sort((p, q) => (p.index < q.index ? -1 : 1)).map(rotated).join("");
+  const banner = (y: number) =>
+    `<rect x="${b.x}" y="${y}" width="${b.width}" height="${bar}" fill="${colour(c.colour, "#000")}"/>` +
+    `<text x="${b.x + b.width / 2}" y="${y + 19}" text-anchor="middle" font-size="16" font-weight="700" font-family="sans-serif" fill="#fff">${esc(markingText)}</text>`;
+  const top = b.y - bar, h = b.height + bar * 2;
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${b.x} ${top} ${b.width} ${h}" width="${b.width}" height="${h}" data-classification="${esc(c.key)}">` +
+    `<title>${esc(opts.title ?? "Board")} (${esc(c.label)})</title>` +
+    `<metadata>classification=${esc(c.key)}</metadata>` +
+    `<rect x="${b.x}" y="${top}" width="${b.width}" height="${h}" fill="#f5f5f5"/>` +
+    banner(top) + body + banner(b.y + b.height) + `</svg>`;
+}
+
+// --- Whole-board JSON (EXP-3) ---
+
+export const BOARD_FILE_FORMAT = "miroclone-board";
+
+export const boardFileSchema = z.object({
+  format: z.literal(BOARD_FILE_FORMAT),
+  version: z.literal(1),
+  title: z.string(),
+  classification: z.string(),
+  objects: z.array(boardObjectSchema).max(MAX_OBJECTS_PER_BOARD),
+});
+export type BoardFile = z.infer<typeof boardFileSchema>;
+
+export function exportJson(objs: readonly BoardObject[], meta: { title: string; classification: string }): string {
+  const file: BoardFile = { format: BOARD_FILE_FORMAT, version: 1, ...meta, objects: [...objs] };
+  return JSON.stringify(file, null, 2);
+}
+
+/** Parses and validates a board file. Throws a readable error for anything malformed. */
+export function importJson(text: string, classifications?: readonly Classification[]): BoardFile {
+  let raw: unknown;
+  try { raw = JSON.parse(text); } catch { throw new Error("The file isn't valid JSON."); }
+  const r = boardFileSchema.safeParse(raw);
+  if (!r.success) throw new Error(`The file isn't a Miroclone board: ${r.error.issues[0]?.path.join(".") ?? ""} ${r.error.issues[0]?.message ?? ""}`.trim());
+  findClassification(r.data.classification, classifications); // Throws on an unknown marking.
+  return r.data;
+}

@@ -1,0 +1,11 @@
+{{- $env := list
+  (dict "name" "PORT" "value" (toString .Values.services.collab.port))
+  (dict "name" "POSTGRES_HOST" "value" (required "Set postgres.host" .Values.postgres.host))
+  (dict "name" "POSTGRES_DB" "value" .Values.postgres.database)
+  (dict "name" "POSTGRES_SSL" "value" (ternary "1" "0" .Values.postgres.tls))
+  (dict "name" "REDIS_HOST" "value" (required "Set redis.host" .Values.redis.host))
+  (dict "name" "METRICS_PORT" "value" (toString .Values.monitoring.metricsPort)) -}}
+{{- if .Values.tracing.endpoint }}
+{{- $env = append $env (dict "name" "OTEL_EXPORTER_OTLP_ENDPOINT" "value" .Values.tracing.endpoint) }}
+{{- end -}}
+{{ include "miroclone.workload" (dict "root" $ "name" "collab" "svc" .Values.services.collab "env" $env "secret" true "metrics" true "preStop" true) }}

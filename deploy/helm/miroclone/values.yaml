@@ -1,0 +1,162 @@
+# Image locations. Override the registry for air-gapped installs, and override any image for a mirror.
+global:
+  imageRegistry: registry.example.internal
+  imagePullSecrets: []
+
+services:
+  web:
+    image: miroclone/web
+    tag: "0.1.0"
+    port: 8080
+    replicas: 2
+  api:
+    image: miroclone/api
+    tag: "0.1.0"
+    port: 3000
+    replicas: 2
+  worker:
+    image: miroclone/worker
+    tag: "0.1.0"
+    port: 8081
+    replicas: 1
+  collab:
+    image: miroclone/collab
+    tag: "0.1.0"
+    port: 1234
+    replicas: 2
+    # Seconds that a stopping pod keeps serving before SIGTERM, so the ingress stops sending it new sockets.
+    preStopSeconds: 20
+    terminationGracePeriodSeconds: 60
+
+entra:
+  tenantId: ""
+  clientId: ""
+  # Must match the redirect URI on the Entra app registration.
+  redirectUri: ""
+
+# PostgreSQL, run by CloudNativePG or a managed on-premises service.
+postgres:
+  host: ""
+  database: miroclone
+  # Turn off only for a test cluster. Connections use TLS and verify the server certificate.
+  tls: true
+
+redis:
+  host: ""
+
+# Object storage for uploaded files: any S3-compatible store, through the standard S3 API (PRD section 8.1).
+# Leave bucket empty to turn uploads off. Then the API refuses them.
+s3:
+  endpoint: ""
+  region: us-east-1
+  bucket: ""
+  # Most on-premises stores need path-style addressing.
+  forcePathStyle: true
+
+# The on-premises ClamAV service that scans every upload before anyone can download it.
+# Uploads are refused when it's missing or down.
+clamd:
+  host: ""
+  port: 3310
+
+# A ConfigMap that holds the organisation's certificate authority, for the object store and the egress proxy.
+# The API trusts it in addition to the system roots.
+tls:
+  caConfigMap: ""
+  caKey: ca.crt
+
+# The internal mail relay that sends notification emails (COL-8). Leave host empty to keep notifications in the app only.
+# Emails hold a link and the board's classification, and no board content.
+smtp:
+  host: ""
+  port: 587
+  from: ""
+  # Turn off only for a test relay. The relay must offer TLS.
+  tls: true
+
+ingress:
+  enabled: true
+  className: nginx
+  host: ""
+  tlsSecretName: miroclone-tls
+  # cert-manager settings, using the organisation's internal certificate authority.
+  clusterIssuer: ""
+  annotations: {}
+
+# Use Gateway API instead of an Ingress. Set ingress.enabled to false when you turn this on.
+gateway:
+  enabled: false
+  parentRefs: []
+
+autoscaling:
+  api: { enabled: true, minReplicas: 2, maxReplicas: 6, cpuPercent: 70 }
+  # The collaboration service scales on CPU until connection metrics are exported (see PRD section 8.6).
+  collab: { enabled: true, minReplicas: 2, maxReplicas: 10, cpuPercent: 60 }
+
+# Secrets come from Passwordstate through ESO (PRD section 8.5). Map each Kubernetes Secret key to a
+# Passwordstate password ID. Never put secret values in this file.
+externalSecrets:
+  enabled: true
+  refreshInterval: 1h
+  store:
+    kind: ClusterSecretStore
+    name: passwordstate
+  api:
+    ENTRA_CLIENT_SECRET: ""
+    # 32 random bytes, base64 encoded. Encrypts Graph tokens in the session store.
+    SESSION_ENCRYPTION_KEY: ""
+    POSTGRES_USER: ""
+    POSTGRES_PASSWORD: ""
+    REDIS_PASSWORD: ""
+    # Add these two when s3.bucket is set:
+    # S3_ACCESS_KEY_ID: ""
+    # S3_SECRET_ACCESS_KEY: ""
+  collab:
+    POSTGRES_USER: ""
+    POSTGRES_PASSWORD: ""
+    REDIS_PASSWORD: ""
+  worker:
+    POSTGRES_USER: ""
+    POSTGRES_PASSWORD: ""
+    # Add these when s3.bucket is set, so the purge job can delete files:
+    # S3_ACCESS_KEY_ID: ""
+    # S3_SECRET_ACCESS_KEY: ""
+    # Add these when the relay needs a login:
+    # SMTP_USER: ""
+    # SMTP_PASSWORD: ""
+
+# Metrics, alerts, and the dashboard for Rancher Monitoring (PRD section 8.6). They need the Prometheus Operator.
+monitoring:
+  enabled: false
+  # Every service serves /metrics on this port. The Service and the ingress never route to it.
+  metricsPort: 9464
+  interval: 30s
+  # Labels that your Prometheus uses to pick up PodMonitors and rules. Rancher Monitoring accepts any.
+  labels: {}
+
+# Traces go to an OpenTelemetry collector in the cluster. Leave empty to turn tracing off, and nothing is sent.
+tracing:
+  endpoint: ""
+
+networkPolicy:
+  # Labels that select the namespace of the cluster's ingress controller.
+  ingressNamespaceLabels:
+    kubernetes.io/metadata.name: kube-system
+  # Entra ID and Microsoft Graph, usually through the egress proxy. List the proxy or address ranges.
+  entraEgressCidrs: []
+  # Labels that select the namespace where Prometheus runs. Only it can reach the metrics port.
+  monitoringNamespaceLabels:
+    kubernetes.io/metadata.name: cattle-monitoring-system
+  # Where traces go. Needed only when tracing.endpoint is set.
+  otlpTo: []
+  otlpPort: 4318
+  # Raw "to" entries for NetworkPolicy egress rules.
+  postgresTo: []
+  redisTo: []
+  # Where the API reaches the object store and ClamAV. Both apply to the API only.
+  s3To: []
+  s3Port: 443
+  clamdTo: []
+  # Where the worker reaches the mail relay, and the port it listens on. The worker also reaches PostgreSQL and the object store.
+  smtpTo: []
+  smtpPort: 587

@@ -1,0 +1,184 @@
+# Deny everything, then allow only the traffic that each component needs (PRD section 8.4).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/part-of: miroclone
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/part-of: miroclone
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - { port: 53, protocol: UDP }
+        - { port: 53, protocol: TCP }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-controller
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/part-of: miroclone
+  policyTypes: [Ingress]
+  # The ingress controller reaches the application ports only. It has no route to the metrics port or to the worker.
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.ingressNamespaceLabels | nindent 14 }}
+      ports:
+        - { port: {{ .Values.services.web.port }}, protocol: TCP }
+        - { port: {{ .Values.services.api.port }}, protocol: TCP }
+        - { port: {{ .Values.services.collab.port }}, protocol: TCP }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-monitoring
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/part-of: miroclone
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.monitoringNamespaceLabels | nindent 14 }}
+      ports:
+        - { port: {{ .Values.monitoring.metricsPort }}, protocol: TCP }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: api-egress-entra
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: api
+  policyTypes: [Egress]
+  egress:
+    {{- range .Values.networkPolicy.entraEgressCidrs }}
+    - to:
+        - ipBlock:
+            cidr: {{ . | quote }}
+      ports:
+        - { port: 443, protocol: TCP }
+    {{- end }}
+    {{- if not .Values.networkPolicy.entraEgressCidrs }}
+    []
+    {{- end }}
+{{- range $name := list "api" "collab" "worker" }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $name }}-egress-data
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: {{ $name }}
+  policyTypes: [Egress]
+  egress:
+    {{- with $.Values.networkPolicy.postgresTo }}
+    - to:
+        {{- toYaml . | nindent 8 }}
+      ports:
+        - { port: 5432, protocol: TCP }
+    {{- end }}
+    {{- with $.Values.networkPolicy.redisTo }}
+    - to:
+        {{- toYaml . | nindent 8 }}
+      ports:
+        - { port: 6379, protocol: TCP }
+    {{- end }}
+    {{- if not (or $.Values.networkPolicy.postgresTo $.Values.networkPolicy.redisTo) }}
+    []
+    {{- end }}
+{{- end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: api-egress-files
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: api
+  policyTypes: [Egress]
+  egress:
+    {{- with .Values.networkPolicy.s3To }}
+    - to:
+        {{- toYaml . | nindent 8 }}
+      ports:
+        - { port: {{ $.Values.networkPolicy.s3Port }}, protocol: TCP }
+    {{- end }}
+    {{- with .Values.networkPolicy.clamdTo }}
+    - to:
+        {{- toYaml . | nindent 8 }}
+      ports:
+        - { port: {{ $.Values.clamd.port }}, protocol: TCP }
+    {{- end }}
+    {{- if not (or .Values.networkPolicy.s3To .Values.networkPolicy.clamdTo) }}
+    []
+    {{- end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: worker-egress-services
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: worker
+  policyTypes: [Egress]
+  egress:
+    {{- with .Values.networkPolicy.smtpTo }}
+    - to:
+        {{- toYaml . | nindent 8 }}
+      ports:
+        - { port: {{ $.Values.networkPolicy.smtpPort }}, protocol: TCP }
+    {{- end }}
+    {{- with .Values.networkPolicy.s3To }}
+    - to:
+        {{- toYaml . | nindent 8 }}
+      ports:
+        - { port: {{ $.Values.networkPolicy.s3Port }}, protocol: TCP }
+    {{- end }}
+    {{- if not (or .Values.networkPolicy.smtpTo .Values.networkPolicy.s3To) }}
+    []
+    {{- end }}
+{{- if and .Values.tracing.endpoint .Values.networkPolicy.otlpTo }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: egress-traces
+spec:
+  podSelector:
+    matchExpressions:
+      - { key: app.kubernetes.io/name, operator: In, values: [api, collab] }
+  policyTypes: [Egress]
+  egress:
+    - to:
+        {{- toYaml .Values.networkPolicy.otlpTo | nindent 8 }}
+      ports:
+        - { port: {{ .Values.networkPolicy.otlpPort }}, protocol: TCP }
+{{- end }}

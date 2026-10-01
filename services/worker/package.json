@@ -1,0 +1,25 @@
+{
+  "name": "@miroclone/worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc -p .",
+    "test": "vitest run",
+    "build": "pnpm bundle",
+    "bundle": "esbuild src/main.ts --bundle --platform=node --format=esm --target=node22 --outfile=dist/main.js --banner:js=\"import{createRequire as __cr}from'node:module';const require=__cr(import.meta.url);\" --external:pg-native",
+    "start": "node --import tsx src/main.ts",
+    "smtp-sink": "node --import tsx dev/smtp-sink.ts"
+  },
+  "dependencies": {
+    "@miroclone/server-core": "workspace:*",
+    "nodemailer": "^6.9.0",
+    "pg": "^8.0.0"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "*",
+    "@types/nodemailer": "^6.4.0",
+    "@types/pg": "^8.0.0",
+    "tsx": "^4.19.0"
+  }
+}

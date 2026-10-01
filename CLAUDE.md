@@ -5,8 +5,30 @@ This file gives Claude Code the context it needs to work in this repository.
 ## Project
 
 Miroclone is an internal, self-hosted collaborative whiteboard that offers the
-core capabilities of Miro. The repository holds only the product
-requirements document (PRD) so far. No application code exists yet.
+core capabilities of Miro. The repository holds the product requirements
+document (PRD) and the code, organised as a pnpm monorepo:
+
+- `packages/shared`: Object model, board operations, roles, classifications,
+  export, templates, workshop state, and the PDF writer.
+- `packages/server-core`: Database migrations, sessions, persistence, search,
+  versions, object storage, and metrics shared by the services.
+- `services/api`: Fastify API service (sign-in, boards, sharing, spaces,
+  comments, files, workshop, exports, administration, migration import).
+- `services/collab`: Hocuspocus collaboration service with role enforcement.
+- `services/worker`: Background jobs (email, purge, search index, versions,
+  compaction).
+- `apps/web`: React and PixiJS client.
+- `tools/miro-migrate`: Command-line tool that converts Miro boards. It runs
+  outside the PROTECTED environment.
+- `deploy/helm/miroclone`: Helm chart for RKE2, with monitoring and network
+  policies.
+- `docker`, `e2e`: Image builds, and end-to-end and load scripts that run
+  against a real stack. See `e2e/README.md`.
+- `docs`: The PRD and the operations guides (performance, backup and restore,
+  accessibility).
+
+Run `pnpm install`, `pnpm typecheck`, and `pnpm test` from the repository root.
+The end-to-end scripts need the local stack that `e2e/README.md` describes.
 
 The source of truth for scope, requirements, and architecture is
 [`docs/PRD.md`](docs/PRD.md). Read it before you propose a design or write
