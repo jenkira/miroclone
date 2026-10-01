@@ -314,3 +314,17 @@ describe("link previews and PDF uploads (CNV-17)", () => {
     expect(files.size).toBe(1);
   });
 });
+
+describe("Teams notifications switch (COL-9)", () => {
+  it("is off by default, changes only for administrators, and takes only true or false", async () => {
+    const admin = await user("tm-admin", true), plain = await user("tm-plain");
+    expect((await plain.call("GET", "/api/admin/teams-notifications")).statusCode).toBe(403);
+    expect((await plain.call("PUT", "/api/admin/teams-notifications", { enabled: true })).statusCode).toBe(403);
+    expect((await admin.call("GET", "/api/admin/teams-notifications")).json()).toEqual({ enabled: false });
+    expect((await admin.call("PUT", "/api/admin/teams-notifications", { enabled: "yes" })).statusCode).toBe(400);
+    expect((await admin.call("PUT", "/api/admin/teams-notifications", { enabled: true })).json()).toEqual({ enabled: true });
+    expect((await admin.call("GET", "/api/admin/teams-notifications")).json()).toEqual({ enabled: true });
+    await admin.call("PUT", "/api/admin/teams-notifications", { enabled: false });
+    expect((await admin.call("GET", "/api/admin/teams-notifications")).json()).toEqual({ enabled: false });
+  });
+});

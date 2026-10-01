@@ -3,6 +3,7 @@ import pg from "pg";
 import { archiveStaleBoards, compactBusyBoards, Counter, createRegistry, Histogram, LATENCY_BUCKETS, serveMetrics, indexStaleBoards, migrate, pruneAutoVersions, purgeExpiredBoards, S3ObjectStore, snapshotChangedBoards } from "@miroclone/server-core";
 import { sendPendingEmails, type Mailer } from "./email.js";
 import { SmtpMailer } from "./smtp.js";
+import { GraphTeamsNotifier, sendPendingTeams, teamsEnabled } from "./teams.js";
 
 function required(name: string): string {
   const v = process.env[name];
@@ -45,6 +46,15 @@ const mailer: Mailer | undefined = process.env.SMTP_HOST
   : undefined;
 const appUrl = process.env.APP_URL;
 
+// Teams activity notifications (COL-9). They use the app's own Entra credentials and go only to Entra ID and Graph.
+// They stay off until an administrator turns them on, and without credentials in this environment there is no job.
+const teams = process.env.ENTRA_CLIENT_ID && process.env.ENTRA_CLIENT_SECRET && process.env.ENTRA_TENANT_ID && appUrl
+  ? new GraphTeamsNotifier({
+      tenantId: process.env.ENTRA_TENANT_ID, clientId: process.env.ENTRA_CLIENT_ID, clientSecret: process.env.ENTRA_CLIENT_SECRET,
+      authority: process.env.ENTRA_AUTHORITY, graphBase: process.env.GRAPH_BASE_URL,
+    })
+  : undefined;
+
 const registry = createRegistry("worker");
 const jobRuns = new Counter({ name: "worker_job_runs_total", help: "Job runs by job and result", labelNames: ["job", "result"], registers: [registry] });
 const jobSeconds = new Histogram({ name: "worker_job_duration_seconds", help: "Job duration", labelNames: ["job"], buckets: LATENCY_BUCKETS, registers: [registry] });
@@ -59,6 +69,7 @@ const every = (name: string, ms: number, job: () => Promise<unknown>) => {
     try {
       const r = (await job()) as Record<string, number> | undefined;
       jobRuns.inc({ job: name, result: "ok" });
+      if (name === "teams" && r) for (const k of ["sent", "failed", "skipped"]) if (r[k]) emails.inc({ result: `teams_${k}` }, r[k]);
       if (name === "emails" && r) for (const k of ["sent", "failed", "skipped"]) if (r[k]) emails.inc({ result: k }, r[k]);
       if (r && Object.values(r).some((n) => n > 0)) log(name, r);
     } catch (err) {
@@ -72,6 +83,7 @@ const every = (name: string, ms: number, job: () => Promise<unknown>) => {
 
 const timers = [
   ...(mailer && appUrl ? [every("emails", 30_000, () => sendPendingEmails(db, mailer, appUrl))] : []),
+  ...(teams && appUrl ? [every("teams", 30_000, async () => (await teamsEnabled(db)) ? sendPendingTeams(db, teams, appUrl) : undefined)] : []),
   every("purge", 60 * 60 * 1000, () => purgeExpiredBoards(db, store)),
   // Boards that nobody has opened for the configured time are archived and become read-only (ADM-4).
   every("retention", 60 * 60 * 1000, async () => {
@@ -90,7 +102,7 @@ const timers = [
 // A small HTTP endpoint for the Kubernetes probes.
 const health = createServer((_req, res) => res.writeHead(running ? 200 : 503).end(running ? "ok" : "stopping"));
 health.listen(Number(process.env.PORT ?? 8081), "0.0.0.0");
-log("worker started", { emails: !!(mailer && appUrl), files: !!store });
+log("worker started", { emails: !!(mailer && appUrl), teams: !!teams, files: !!store });
 
 process.once("SIGTERM", async () => {
   running = false;

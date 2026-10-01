@@ -28,4 +28,4 @@ The following list describes where to find each part:
 - `tools/miro-migrate`: The [Miro migration tool](tools/miro-migrate/README.md).
 - `deploy/helm/miroclone`: The Helm chart.
 - `e2e`: End-to-end and load scripts. See [e2e/README.md](e2e/README.md).
-- `docs/operations`: [Performance](docs/operations/performance.md), [backup and restore](docs/operations/backup-restore.md), and [accessibility](docs/operations/accessibility.md).
+- `docs/operations`: [Performance](docs/operations/performance.md), [backup and restore](docs/operations/backup-restore.md), and [accessibility](docs/operations/accessibility.md), and [Teams notifications](docs/operations/teams.md).

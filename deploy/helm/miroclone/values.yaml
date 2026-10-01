@@ -74,6 +74,13 @@ smtp:
   # Turn off only for a test relay. The relay must offer TLS.
   tls: true
 
+# Teams activity notifications (COL-9). The worker sends them through Microsoft Graph with the app's own credentials,
+# and only while an administrator turns them on in the app. They hold a link and the classification, and no board content.
+# Before you enable this, your tenant administrator must approve the Teams app (deploy/teams) and grant the application
+# permission TeamsActivity.Send. Add ENTRA_CLIENT_SECRET to externalSecrets.worker too, and list the Entra egress addresses.
+teams:
+  enabled: false
+
 ingress:
   enabled: true
   className: nginx
@@ -124,6 +131,8 @@ externalSecrets:
     # Add these when the relay needs a login:
     # SMTP_USER: ""
     # SMTP_PASSWORD: ""
+    # Add this when teams.enabled is true:
+    # ENTRA_CLIENT_SECRET: ""
 
 # Metrics, alerts, and the dashboard for Rancher Monitoring (PRD section 8.6). They need the Prometheus Operator.
 monitoring:
