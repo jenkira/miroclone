@@ -34,6 +34,8 @@ const json = (res: import("node:http").ServerResponse, body: unknown, status = 2
   res.end(JSON.stringify(body));
 };
 
+const teamsSent: { user: string; body: unknown }[] = [];
+
 createServer(async (req, res) => {
   const url = new URL(req.url!, BASE);
   const path = url.pathname;
@@ -52,6 +54,11 @@ createServer(async (req, res) => {
     let raw = ""; for await (const c of req) raw += c;
     const f = new URLSearchParams(raw);
     const grant = f.get("grant_type");
+    // The app's own token, for the worker's Teams notifications. The fake accepts the client secret "x".
+    if (grant === "client_credentials") {
+      if (f.get("client_secret") !== "x") return json(res, { error: "invalid_client" }, 401);
+      return json(res, { access_token: `app-${randomUUID()}`, expires_in: 3600 });
+    }
     if (grant === "refresh_token") return json(res, { access_token: `at-${randomUUID()}`, refresh_token: f.get("refresh_token"), expires_in: 3600 });
     const entry = codes.get(f.get("code") ?? "");
     codes.delete(f.get("code") ?? "");
@@ -64,6 +71,18 @@ createServer(async (req, res) => {
     const idToken = await new SignJWT(claims).setProtectedHeader({ alg: "RS256", kid: "dev" })
       .setIssuer(`${BASE}/${TENANT}/v2.0`).setAudience(f.get("client_id")!).setIssuedAt().setExpirationTime("1h").sign(privateKey);
     return json(res, { id_token: idToken, access_token: `at-${randomUUID()}`, refresh_token: `rt-${randomUUID()}`, expires_in: 3600 });
+  }
+
+  // Teams activity notifications are recorded, so a test can read them back. A person with no Teams app gets a 404.
+  if (path === "/__teams") return json(res, teamsSent);
+  const feed = /^\/v1\.0\/users\/([^/]+)\/teamwork\/sendActivityNotification$/.exec(path);
+  if (feed && req.method === "POST") {
+    if (!req.headers.authorization?.startsWith("Bearer app-")) return json(res, { error: "unauthorized" }, 401);
+    let raw = ""; for await (const c of req) raw += c;
+    const who = decodeURIComponent(feed[1]!);
+    if (who === "oid-dee") return json(res, { error: "not installed" }, 404);
+    teamsSent.push({ user: who, body: JSON.parse(raw) });
+    res.writeHead(204); return void res.end();
   }
 
   // Graph. The token is opaque here, but a missing one is rejected like the real service does.

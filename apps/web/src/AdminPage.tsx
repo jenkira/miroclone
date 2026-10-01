@@ -14,6 +14,8 @@ export function AdminPage() {
   const [markerMessage, setMarkerMessage] = useState("");
   const [hosts, setHosts] = useState<string | null>(null);
   const [hostsMessage, setHostsMessage] = useState("");
+  const [teams, setTeams] = useState<boolean | null>(null);
+  const [teamsMessage, setTeamsMessage] = useState("");
   const [months, setMonths] = useState<number | null | undefined>(undefined);
   const [retentionMessage, setRetentionMessage] = useState("");
   const [forbidden, setForbidden] = useState(false);
@@ -23,6 +25,7 @@ export function AdminPage() {
     api.classifications().then(setCfg).catch(() => {});
     api.markers().then(setMarkers).catch(() => {});
     api.previewHosts().then((h) => setHosts(h.join("\n"))).catch(() => {});
+    api.teamsNotifications().then((t) => setTeams(t.enabled)).catch(() => {});
     api.retention().then((r) => setMonths(r.archiveAfterMonths)).catch(() => {});
   }, []);
 
@@ -106,6 +109,20 @@ export function AdminPage() {
             try { await api.saveRetention(months); setRetentionMessage("Saved."); } catch { setRetentionMessage("The rule wasn't saved."); }
           }}>Save retention rule</button>
           <p role="status">{retentionMessage}</p>
+        </>
+      )}
+
+      <h2>Teams notifications</h2>
+      {teams !== null && (
+        <>
+          <p>When this is on, people who are mentioned or replied to also get a Microsoft Teams activity notification, if they installed the Miroclone Teams app. The notification names the classification and links to the board. It holds no board title, comment, or name. The worker sends it through Microsoft Graph, so turn it on only after your tenant administrator approves the app and grants its permission.</p>
+          <label>
+            <input type="checkbox" checked={teams} onChange={async (e) => {
+              setTeamsMessage("");
+              try { setTeams((await api.setTeamsNotifications(e.target.checked)).enabled); setTeamsMessage("Saved."); } catch { setTeamsMessage("The setting wasn't saved."); }
+            }} /> Send Teams notifications
+          </label>
+          <p role="status">{teamsMessage}</p>
         </>
       )}
 

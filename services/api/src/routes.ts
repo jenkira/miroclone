@@ -309,6 +309,22 @@ export function boardRoutes(app: FastifyInstance, opts: { db: Db; sessions: Sess
       return value;
     });
 
+    // Teams activity notifications (COL-9). The worker sends them, only while this is on.
+    api.get("/api/admin/teams-notifications", async (req) => {
+      adminOnly(req);
+      const { rows } = await db.query<{ value: boolean }>("SELECT value FROM settings WHERE key = 'teams_notifications'");
+      return { enabled: rows[0]?.value === true };
+    });
+    api.put<{ Body: { enabled: boolean } }>("/api/admin/teams-notifications", async (req) => {
+      adminOnly(req);
+      if (typeof req.body?.enabled !== "boolean") throw new boards.Invalid("enabled must be true or false");
+      await db.query(
+        `INSERT INTO settings (key, value, updated_by) VALUES ('teams_notifications', $1, $2)
+         ON CONFLICT (key) DO UPDATE SET value = $1, updated_by = $2, updated_at = now()`, [JSON.stringify(req.body.enabled), req.session!.userId]);
+      audit({ action: "settings_change", actor: req.session!.userId, detail: { setting: "teams_notifications", enabled: req.body.enabled } });
+      return { enabled: req.body.enabled };
+    });
+
     // Retention (ADM-4). The worker archives boards that nobody has opened for the configured time.
     api.get("/api/admin/retention", async (req) => { adminOnly(req); return loadRetention(db); });
     api.put<{ Body: unknown }>("/api/admin/retention", async (req) => {

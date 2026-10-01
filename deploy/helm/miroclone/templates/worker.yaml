@@ -9,12 +9,18 @@
 {{- $env = append $env (dict "name" "S3_FORCE_PATH_STYLE" "value" (ternary "1" "0" .Values.s3.forcePathStyle)) }}
 {{- with .Values.s3.endpoint }}{{ $env = append $env (dict "name" "S3_ENDPOINT" "value" .) }}{{ end }}
 {{- end }}
+{{- if .Values.teams.enabled }}
+{{- $env = append $env (dict "name" "ENTRA_TENANT_ID" "value" (required "Set entra.tenantId" .Values.entra.tenantId)) }}
+{{- $env = append $env (dict "name" "ENTRA_CLIENT_ID" "value" (required "Set entra.clientId" .Values.entra.clientId)) }}
+{{- end }}
+{{- if or .Values.smtp.host .Values.teams.enabled }}
+{{- $env = append $env (dict "name" "APP_URL" "value" (printf "https://%s" (required "Set ingress.host" .Values.ingress.host))) }}
+{{- end }}
 {{- if .Values.smtp.host }}
 {{- $env = append $env (dict "name" "SMTP_HOST" "value" .Values.smtp.host) }}
 {{- $env = append $env (dict "name" "SMTP_PORT" "value" (toString .Values.smtp.port)) }}
 {{- $env = append $env (dict "name" "SMTP_FROM" "value" (required "Set smtp.from" .Values.smtp.from)) }}
 {{- $env = append $env (dict "name" "SMTP_TLS" "value" (ternary "1" "0" .Values.smtp.tls)) }}
-{{- $env = append $env (dict "name" "APP_URL" "value" (printf "https://%s" (required "Set ingress.host" .Values.ingress.host))) }}
 {{- end }}
 {{- $env = append $env (dict "name" "METRICS_PORT" "value" (toString .Values.monitoring.metricsPort)) }}
 {{- if .Values.tls.caConfigMap }}

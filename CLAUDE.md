@@ -22,10 +22,12 @@ document (PRD) and the code, organised as a pnpm monorepo:
   outside the PROTECTED environment.
 - `deploy/helm/miroclone`: Helm chart for RKE2, with monitoring and network
   policies.
+- `deploy/teams`: Teams app manifest template and a script that builds the
+  package for Teams activity notifications.
 - `docker`, `e2e`: Image builds, and end-to-end and load scripts that run
   against a real stack. See `e2e/README.md`.
 - `docs`: The PRD and the operations guides (performance, backup and restore,
-  accessibility).
+  accessibility, Teams).
 
 Run `pnpm install`, `pnpm typecheck`, and `pnpm test` from the repository root.
 The end-to-end scripts need the local stack that `e2e/README.md` describes.

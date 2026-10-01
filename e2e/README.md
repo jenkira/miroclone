@@ -129,3 +129,10 @@ The script `canvas-p2.mjs` needs the full-stack setup and the `pdfinfo` tool. It
 shortcuts (Tab for a child, Enter for a sibling) and branch delete and undo, link cards, and PDF cards. It starts a fake
 internal wiki on the machine's non-loopback address, because the link preview refuses loopback addresses. It skips the
 link checks when the machine has no such address.
+
+## Teams notifications test
+
+The script `teams.mjs` needs the full-stack setup, and `ada`, `ann`, and `bob`. It starts a worker on port 8095 with Teams credentials for
+the fake identity provider, which also stands in for Graph and records each notification. It checks that nothing is sent while the
+setting is off, that a mention sends one notification with the classification and link and no board content, and that the worker sends
+it once. Free port 8095 first, and wait about a minute, because the worker looks every 30 seconds.

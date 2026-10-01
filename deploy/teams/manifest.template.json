@@ -1,0 +1,33 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/teams/v1.16/MicrosoftTeams.schema.json",
+  "manifestVersion": "1.16",
+  "version": "1.0.0",
+  "id": "{{TEAMS_APP_ID}}",
+  "developer": {
+    "name": "{{ORGANISATION}}",
+    "websiteUrl": "{{APP_URL}}",
+    "privacyUrl": "{{APP_URL}}",
+    "termsOfUseUrl": "{{APP_URL}}"
+  },
+  "name": { "short": "Miroclone", "full": "Miroclone whiteboard" },
+  "description": {
+    "short": "Activity notifications for your Miroclone boards.",
+    "full": "Miroclone tells you in Teams when someone mentions you or replies to you on a board. A notification names the board's classification and links to the board. It holds no board content."
+  },
+  "icons": { "outline": "outline.png", "color": "color.png" },
+  "accentColor": "#1565C0",
+  "webApplicationInfo": {
+    "id": "{{ENTRA_CLIENT_ID}}",
+    "resource": "api://{{APP_HOST}}/{{ENTRA_CLIENT_ID}}"
+  },
+  "activities": {
+    "activityTypes": [
+      {
+        "type": "boardActivity",
+        "description": "New activity on a board",
+        "templateText": "New activity on a {classification} board"
+      }
+    ]
+  },
+  "validDomains": ["{{APP_HOST}}"]
+}

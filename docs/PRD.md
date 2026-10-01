@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Status | Draft for review |
-| Version | 0.9 |
+| Version | 0.10 |
 | Date | 30 September 2026 |
 | Owner | To be confirmed |
 | Working name | Miroclone |
@@ -41,6 +41,7 @@ Table 1. Change history
 | 0.7 | 30 September 2026 | Recorded implementation decisions: the session encryption key replaces the session signing key in section 8.5, the collaboration route hashes on the URL path in section 8.4, and the API stores the signed-in user's Graph tokens in the session (section 8.3). Added a risk for those tokens. |
 | 0.8 | 1 October 2026 | Recorded implementation decisions: the API scans uploads and the worker handles email, purge, indexing, versions, and compaction (section 8.1), metrics use their own port (section 8.6), the restore procedure and performance results have runbooks (sections 7.1 and 8.7), and added three risks. |
 | 0.9 | 1 October 2026 | Built the remaining P2 requirements except COL-9 and MIG-6, which depend on open questions Q5 and Q17. Recorded how private mode, link previews, and PDF embeds work, added three risks, and added question Q17. |
+| 0.10 | 1 October 2026 | Built COL-9 as Teams activity notifications through Microsoft Graph, withdrew MIG-6, and answered questions Q5 and Q17. Added section 8.1 detail, a risk, and a source. |
 
 ## 2. Background and research
 
@@ -301,7 +302,7 @@ Table 11. Migration requirements
 | MIG-3 | The tool replaces unsupported items with a placeholder that names the original item type. | P1 |
 | MIG-4 | The tool writes a report for each board that lists converted items, placeholders, and errors. | P1 |
 | MIG-5 | Administrators bulk import converted boards, assign owners by matching email addresses to Entra users, and set each board's classification. | P1 |
-| MIG-6 | The tool keeps comments, with the original author's name and date as text. | P2 |
+| MIG-6 | Withdrawn. The tool doesn't keep Miro comments (see answered question Q17). | P2 |
 
 ### 6.9 Administration
 
@@ -414,7 +415,11 @@ The system has the following components:
 4. **Worker service**: Background jobs for notification email, purging boards
    from the recycle bin, search indexing, automatic versions, and compaction
    of stored updates. Compaction runs here so that merging a large board never
-   takes time from the collaboration service. The API scans uploads for
+   takes time from the collaboration service. It also sends Teams activity
+   feed notifications through Microsoft Graph, with the app's own Entra
+   credentials, only while an administrator turns them on (COL-9). The
+   notification holds a link and the classification, and no board content.
+   See [Set up Teams notifications](operations/teams.md). The API scans uploads for
    malware before it stores them, so a file is never available unscanned.
    Browsers render PNG and PDF exports, and the API serves board thumbnails
    as sandboxed SVG.
@@ -715,6 +720,7 @@ Table 15. Risks and mitigations
 | Private mode (WSH-7) hides other people's notes in each browser only. | A participant who changes their browser sees every note, because the document reaches all editors. | Use private mode for brainstorming etiquette, not to keep content from people on the board. The board lock is different: the collaboration service enforces it, drops forged locks, and ends the lock when its owner leaves. |
 | Link previews (CNV-17) make the service fetch pages. | A preview reaches an outside site, or an internal service the user shouldn't reach (server-side request forgery). | Previews are off until an administrator lists hosts. The service fetches, never the browser. It sends no credentials, refuses loopback and link-local addresses, follows redirects only within the host, and stops at a size and time limit. Only editors can ask for one. |
 | A PDF embed (CNV-17) can carry active content. | A PDF that runs code or opens other files reaches users. | The upload route scans each PDF for malware, refuses names that run code or carry files, and shows the PDF in the browser's own viewer from a local address. Compressed object streams hide names from the check, so the scanner and the viewer stay the first layers. |
+| The Teams application permission TeamsActivity.Send lets the app notify any user in the tenant. | A leaked app secret lets someone send notifications that look like Miroclone's. | The secret comes from Passwordstate through ESO. The worker is the only holder besides the API, and its egress is limited to Entra ID and Graph. The notification links to the board and holds no content, so a forged one gives no data. An administrator turns the feature on, and the permission needs tenant consent. |
 | Entra configuration needs tenant administrator time. | Blocks R0 sign-in work. | Request the app registration, app roles, conditional access policy, and Graph consent at project start. |
 | Users rely on Miro-specific features the product lacks. | Low adoption. | Survey current Miro users before R1 and adjust priorities. |
 
@@ -738,6 +744,8 @@ Table 16. Answered questions
 | Q3 | Can Entra B2B guest users use the product? | Yes. Guests with Entra access are cleared. | Updated IAM-12. |
 | Q11 | Which S3-compatible object store is available? | MinIO, or any S3-compatible store | Updated sections 8.1 and 8.7, and added a risk. |
 | Q15 | Which operator syncs Passwordstate secrets into Kubernetes? | External Secrets Operator | Added section 8.5 and updated a risk. |
+| Q5 | Is a Microsoft Teams integration a priority, and is it approved? | Yes, for notifications. | Built COL-9 as activity feed notifications through Graph, with no board content. Updated section 8.1 and added a risk. A Teams tab isn't built. |
+| Q17 | Does the Miro REST API give access to board comments? | Ignore Miro comments. | Withdrew MIG-6. |
 
 ### 12.2 Remaining questions
 
@@ -745,17 +753,6 @@ The following questions need answers before or during R0:
 
 - **Q4a**: If migration goes ahead, how many boards need to move, and what is
   their classification in Miro?
-- **Q5**: Is a Microsoft Teams integration (such as a Teams tab or
-  notifications) a priority, and is it approved for this environment? COL-9
-  isn't built, because posting to Teams needs an outbound call to a service
-  other than Entra ID and Microsoft Graph, which the fixed constraints don't
-  allow. A Graph-based design, where the app posts through Graph with the
-  signed-in user's token, needs the platform team to approve the extra
-  Graph permission.
-- **Q17**: Does the Miro REST API give access to board comments for your
-  plan? The product keeps comments as text with the author's name and date
-  (MIG-6) only if it does. The public REST API (v2) lists no comments
-  endpoint, so the migration tool doesn't read them.
 - **Q6**: Do users want AI features, such as summarising sticky notes or
   clustering ideas? At PROTECTED, any model service must run on premises or be
   authorised for PROTECTED.
@@ -791,6 +788,7 @@ The research for this document used the following sources:
 - [External Secrets Operator: Webhook provider](https://external-secrets.io/latest/provider/webhook/)
 - [Using External Secrets Operator with HTTP endpoints: a complete guide](https://zerotohero.dev/inbox/eso-webhook-provider/)
 - [Miro REST API](https://developers.miro.com/docs/rest-api-reference-guide)
+- [Microsoft Graph: teamsActivity sendActivityNotification](https://learn.microsoft.com/graph/api/userteamwork-sendactivitynotification)
 - [Information Security Manual (ISM)](https://www.cyber.gov.au/resources-business-and-government/essential-cyber-security/ism)
 - [Protective Security Policy Framework (PSPF)](https://www.protectivesecurity.gov.au/)
 - [Queensland Government Information Security Classification Framework (QGISCF)](https://www.forgov.qld.gov.au/information-and-communication-technology/qgea-policies-standards-and-guidelines/information-security-classification-framework-qgiscf)
