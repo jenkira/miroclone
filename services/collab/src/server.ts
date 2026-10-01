@@ -39,13 +39,19 @@ export function createCollabServer(opts: { port: number; resolver: AccessResolve
     },
     onLoadDocument: ({ documentName }) => span("collab.load_document", async () => {
       const end = load.startTimer();
-      try { return await loadDoc(opts.db, documentName); } finally { end(); }
+      try {
+        const doc = await loadDoc(opts.db, documentName);
+        // If the worker isn't running, updates would pile up, so a board that opens with a long backlog is compacted once, in the background.
+        void compact(opts.db, documentName, 1000).catch(() => {});
+        return doc;
+      } finally { end(); }
     }),
     async onChange({ documentName, update }) {
       sizes.observe(update.byteLength);
       await span("collab.persist_update", async () => {
         const end = persist.startTimer();
-        try { await appendUpdate(opts.db, documentName, update); await compact(opts.db, documentName); }
+        // The worker compacts stored updates on a timer. Merging a large board here would stall every connection on this pod.
+        try { await appendUpdate(opts.db, documentName, update); }
         catch (e) { errors.inc(); throw e; }
         finally { end(); }
       });

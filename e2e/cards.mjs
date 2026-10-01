@@ -83,6 +83,20 @@ const v1 = await page.evaluate(() => window.__api.current.viewport());
 check("clicking the minimap moves the view", Math.abs(v1.x - v0.x) > 5 || Math.abs(v1.y - v0.y) > 5, `${Math.round(v0.x)},${Math.round(v0.y)} -> ${Math.round(v1.x)},${Math.round(v1.y)}`);
 check("the minimap draws the objects and the view", (await map.locator("rect").count()) >= 4);
 
+// Keyboard navigation (section 7.3)
+await page.evaluate(() => document.querySelector("[role=application]").focus());
+await page.keyboard.press("Escape");
+await page.keyboard.press("Tab");
+const first = await page.evaluate(() => window.__api.current.selection());
+const said = await page.getByRole("status").filter({ hasText: /of \d+\./ }).first().innerText();
+check("Tab selects the first object and announces it", first.length === 1 && /^\w[\w ]*.* 1 of \d+\.$/.test(said), said);
+await page.keyboard.press("Tab");
+const second = await page.evaluate(() => window.__api.current.selection());
+check("Tab again moves to the next object", second.length === 1 && second[0] !== first[0] && /2 of/.test(await page.getByRole("status").filter({ hasText: /of \d+\./ }).first().innerText()));
+await page.keyboard.press("Shift+Tab");
+check("Shift+Tab moves back", (await page.evaluate(() => window.__api.current.selection()))[0] === first[0]);
+await page.keyboard.press("Escape");
+
 // 4. PDF export: one page per frame, in order
 await page.evaluate(() => {
   const b = window.__board;

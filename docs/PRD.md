@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Status | Draft for review |
-| Version | 0.7 |
+| Version | 0.8 |
 | Date | 30 September 2026 |
 | Owner | To be confirmed |
 | Working name | Miroclone |
@@ -39,6 +39,7 @@ Table 1. Change history
 | 0.5 | 30 September 2026 | Named External Secrets Operator (ESO) as the Passwordstate sync operator and defined how the Helm chart requests secrets. |
 | 0.6 | 30 September 2026 | Added section 8.5.1 on connecting ESO to Passwordstate through the ESO webhook provider, and narrowed Q16. |
 | 0.7 | 30 September 2026 | Recorded implementation decisions: the session encryption key replaces the session signing key in section 8.5, the collaboration route hashes on the URL path in section 8.4, and the API stores the signed-in user's Graph tokens in the session (section 8.3). Added a risk for those tokens. |
+| 0.8 | 1 October 2026 | Recorded implementation decisions: the API scans uploads and the worker handles email, purge, indexing, versions, and compaction (section 8.1), metrics use their own port (section 8.6), the restore procedure and performance results have runbooks (sections 7.1 and 8.7), and added three risks. |
 
 ## 2. Background and research
 
@@ -327,6 +328,9 @@ Table 13. Performance targets
 | PRF-5 | Concurrent editors per board | 50 editors and 200 viewers |
 | PRF-6 | Total concurrent users across the service | 2,000, scaling horizontally within cluster capacity |
 
+See the [performance report](operations/performance.md) for the measured
+results and their limits.
+
 ### 7.2 Availability and recovery
 
 The service meets the following availability and recovery targets:
@@ -406,8 +410,13 @@ The system has the following components:
    over WebSockets. It checks sessions and board roles through hooks, stores
    document state in PostgreSQL, and uses Redis to fan out updates between
    pods.
-4. **Worker service**: Background jobs for thumbnails, PDF and image export,
-   search indexing, malware scanning, and snapshot compaction.
+4. **Worker service**: Background jobs for notification email, purging boards
+   from the recycle bin, search indexing, automatic versions, and compaction
+   of stored updates. Compaction runs here so that merging a large board never
+   takes time from the collaboration service. The API scans uploads for
+   malware before it stores them, so a file is never available unscanned.
+   Browsers render PNG and PDF exports, and the API serves board thumbnails
+   as sandboxed SVG.
 5. **PostgreSQL**: Stores users, boards, memberships, classifications,
    comments, audit events, and Yjs document snapshots and updates. The
    CloudNativePG operator runs it in the cluster, unless the organisation has
@@ -625,7 +634,10 @@ The services meet the following observability requirements:
 - Emit structured JSON logs.
 - Expose Prometheus metrics, including active connections, documents loaded,
   sync latency, and update sizes.
-- Emit OpenTelemetry traces for API and collaboration requests.
+- Serve metrics on their own port (9464), which no Kubernetes Service exposes.
+  Rancher Monitoring scrapes the pods directly through a PodMonitor.
+- Emit OpenTelemetry traces for API and collaboration requests. Tracing stays
+  off until an OTLP endpoint is set.
 - Ship Grafana dashboards and alert rules in the Helm chart, compatible with
   Rancher Monitoring.
 
@@ -642,7 +654,9 @@ The deployment meets the following backup requirements:
 - Stores backups encrypted, on infrastructure authorised for PROTECTED.
 - Backs up Kubernetes resources with the cluster's existing tool, such as
   Rancher Backups or Velero.
-- Documents and tests the restore procedure every quarter.
+- Documents and tests the restore procedure every quarter. See
+  [Back up and restore](operations/backup-restore.md) for the procedure and the
+  restore test.
 
 ## 9. Release plan
 
@@ -693,7 +707,10 @@ Table 15. Risks and mitigations
 | The `Whiteboard.User` app role acts as the clearance check for staff and guests (IAM-11 and IAM-12). | An uncleared user or guest who gets the role can open PROTECTED boards. | Assign the role only through a group that the security team controls, and review its membership regularly. |
 | The session store holds each user's Graph refresh token. | A read of Redis, with the session encryption key, exposes delegated access to the directory for the session's lifetime. | Encrypt the tokens with a key from Passwordstate, key Redis entries by a hash of the session ID, require Redis authentication and TLS, and expire entries at the session's maximum lifetime (IAM-10). |
 | Miro content converts poorly. | Teams lose work or trust in the product. | Produce a report for each board (MIG-4). Run a trial migration on sample boards before bulk migration. |
-| Canvas apps are hard to make accessible. | Fails the WCAG requirement for some users. | Design keyboard and screen reader support from R1, and schedule an audit in R2. |
+| Canvas apps are hard to make accessible. | Fails the WCAG requirement for some users. | Design keyboard and screen reader support from R1, and schedule an audit in R2. The canvas supports Tab navigation and screen reader announcements now. See the [accessibility statement](operations/accessibility.md). |
+| The Miro export folder holds board content outside the PROTECTED environment until an administrator imports it. | Content sits on the machine that runs the tool, and on the transfer path. | Run the tool on an approved machine. Delete the folder after the import. The tool never writes the Miro token to disk. The administrator sets each board's classification at import (MIG-5). |
+| One collaboration process serves each board, because all its connections hash to one pod. | A board with 50 editors and 200 viewers shows slower delivery at the 95th percentile than the 200 ms target in the development measurements. | Repeat the load test on the cluster, profile the pod, and size its CPU request for the busiest boards. Compaction already runs in the worker. |
+| Organisation-wide visibility (IAM-8) makes a board readable by every signed-in user. | An owner exposes a board more widely than intended. | The app blocks the option on PROTECTED boards, and ends it when an owner raises a board to PROTECTED. Each change goes in the audit log, and boards with this setting stay out of dashboards. |
 | Entra configuration needs tenant administrator time. | Blocks R0 sign-in work. | Request the app registration, app roles, conditional access policy, and Graph consent at project start. |
 | Users rely on Miro-specific features the product lacks. | Low adoption. | Survey current Miro users before R1 and adjust priorities. |
 

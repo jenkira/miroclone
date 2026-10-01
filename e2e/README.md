@@ -85,3 +85,33 @@ pickers and banners, that a marking in use can't be removed, that markings at on
 equivalent, and the paste warning and its audit event. It resets the markings before and after, so
 use a test database. Restart the API after restarting the fake identity provider, because the API
 caches the provider's signing key.
+
+## Spaces and visibility test
+
+The script `spaces.mjs` needs the full-stack setup. It checks organisation-wide visibility from the share
+dialog (and that the option is off for PROTECTED boards), ownership transfer, spaces with members, the dashboard
+space filter, and thumbnails. Restart the API after pulling a change that adds a migration.
+
+## Cards, snapping, minimap, and PDF test
+
+The script `cards.mjs` needs the full-stack setup and the `pdfinfo` and `pdftoppm` tools from Poppler. It checks the
+card tool and details bar, snapping and the Alt override, the minimap, keyboard navigation with Tab and its announcements,
+and that a PDF export opens in a real reader with one page for each frame. Set `SHOT_DIR` to keep a screenshot and the
+first PDF page.
+
+## Migration test
+
+The script `migration.mjs` needs the full-stack setup, and the fake identity provider's administrator and `ann`. It
+starts a fake Miro, runs the migration tool against it, and then imports the output as an administrator. It checks that the token
+only goes to Miro, that the report and files hold no token, owner matching by email, the chosen classification, image storage,
+frame-relative positions, and that a second import of the same board is refused.
+
+## Load test
+
+The script `load.mjs` needs the full-stack setup. It measures change propagation, board open time, and many editors and
+viewers on one board. The [performance report](../docs/operations/performance.md) describes the options and what the results mean.
+
+## Restore test
+
+The script `restore-test.sh` dumps the database, restores it into a new database, and compares every table. Set the
+`POSTGRES_*` variables first. The [backup and restore guide](../docs/operations/backup-restore.md) describes when to run it.

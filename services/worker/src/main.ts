@@ -1,6 +1,6 @@
 import { createServer } from "node:http";
 import pg from "pg";
-import { Counter, createRegistry, Histogram, LATENCY_BUCKETS, serveMetrics, indexStaleBoards, migrate, pruneAutoVersions, purgeExpiredBoards, S3ObjectStore, snapshotChangedBoards } from "@miroclone/server-core";
+import { compactBusyBoards, Counter, createRegistry, Histogram, LATENCY_BUCKETS, serveMetrics, indexStaleBoards, migrate, pruneAutoVersions, purgeExpiredBoards, S3ObjectStore, snapshotChangedBoards } from "@miroclone/server-core";
 import { sendPendingEmails, type Mailer } from "./email.js";
 import { SmtpMailer } from "./smtp.js";
 
@@ -73,6 +73,8 @@ const every = (name: string, ms: number, job: () => Promise<unknown>) => {
 const timers = [
   ...(mailer && appUrl ? [every("emails", 30_000, () => sendPendingEmails(db, mailer, appUrl))] : []),
   every("purge", 60 * 60 * 1000, () => purgeExpiredBoards(db, store)),
+  // Stored updates merge here, so the collaboration service never spends its single thread on it.
+  every("compact", 15_000, async () => ({ compacted: await compactBusyBoards(db) })),
   // New and changed boards reach search within seconds (BRD-4).
   every("search-index", 10_000, async () => ({ indexed: await indexStaleBoards(db) })),
   // Automatic versions (BRD-6): changed boards get one at most every 10 minutes, and old ones are pruned.

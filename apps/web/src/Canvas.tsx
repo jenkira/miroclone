@@ -4,6 +4,7 @@ import type * as Y from "yjs";
 import type { Awareness } from "y-protocols/awareness";
 import { isSafeLink, Board, type BoardObject } from "@miroclone/shared";
 import { boundsOf } from "@miroclone/shared";
+import { describeObject, focusOrder, stepFocus } from "./selection.js";
 import { hitHandle, hitTest, intersects, normaliseRect, resizeFromHandle, rotationFor, snapBox, strokesHit, type Handle, type Point, type Rect } from "./geometry.js";
 import { drawCursor, drawObject, drawSelection, Scene, textHeight, withDefaults } from "./render.js";
 import { objectForGesture, type Tool } from "./tools.js";
@@ -105,6 +106,7 @@ const resizable = (o: BoardObject) => o.type !== "connector" && o.type !== "stro
 
 export function Canvas({ board, tool, readOnly, awareness, onToolDone, apiRef, onSelect, onFiles, pins, selectedPin, onPinClick, onComment, canComment, badges, onVote, canVote, onViewChange, boardId, classification, onPasteCheck, overlay }: CanvasProps) {
   const host = useRef<HTMLDivElement>(null);
+  const [announcement, setAnnouncement] = useState("");
   const toolRef = useRef(tool);
   const roRef = useRef(readOnly);
   const onSelectRef = useRef(onSelect);
@@ -417,6 +419,21 @@ export function Canvas({ board, tool, readOnly, awareness, onToolDone, apiRef, o
       const k = e.key.toLowerCase();
       const ro = roRef.current;
       const sel = selection.current;
+      // Tab moves between objects while the canvas has focus, and leaves the canvas after the last one (section 7.3).
+      if (e.key === "Tab" && e.target === el && !mod) {
+        const order = focusOrder(board.list());
+        const next = stepFocus(order, sel.length === 1 ? sel[0] : undefined, e.shiftKey);
+        if (next) {
+          e.preventDefault();
+          setSel([next.id]);
+          setAnnouncement(describeObject(next, order.indexOf(next) + 1, order.length));
+          // Bring the object into view if it's off screen.
+          const v = view.current, sx = next.x * v.zoom + v.x, sy = next.y * v.zoom + v.y;
+          if (sx < 0 || sy < 0 || sx + next.width * v.zoom > el.clientWidth || sy + next.height * v.zoom > el.clientHeight) apiRef?.current?.centreOn({ x: next.x + next.width / 2, y: next.y + next.height / 2 });
+        }
+        return;
+      }
+      if (e.key === "Enter" && e.target === el && sel.length === 1) { e.preventDefault(); startEdit(sel[0]!); return; }
       if (e.shiftKey && e.key === "!") { e.preventDefault(); showRect(boundsOf(board.list(), 0)); }          // Shift+1
       else if (e.shiftKey && e.key === "@") { e.preventDefault(); apiRef?.current?.fitSelection(); }          // Shift+2
       else if (mod && k === "z" && !ro) { e.preventDefault(); e.shiftKey ? board.undo.redo() : board.undo.undo(); }
@@ -508,7 +525,9 @@ export function Canvas({ board, tool, readOnly, awareness, onToolDone, apiRef, o
 
   return (
     <div style={{ position: "relative", flex: 1, minHeight: 0 }}>
-      <div ref={host} style={{ position: "absolute", inset: 0 }} role="application" aria-label="Board canvas" tabIndex={0} />
+      <div ref={host} style={{ position: "absolute", inset: 0 }} role="application" aria-label="Board canvas. Press Tab to move between objects, Enter to edit, and the arrow keys to move the selected object." tabIndex={0} />
+      {/* A screen reader reads this when the keyboard moves between objects. */}
+      <div aria-live="polite" role="status" style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clip: "rect(0 0 0 0)" }}>{announcement}</div>
       {overlay}
       {editing && (
         <textarea
