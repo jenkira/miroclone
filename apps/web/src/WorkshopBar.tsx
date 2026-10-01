@@ -18,8 +18,13 @@ export function WorkshopBar({ w }: { w: W }) {
           {done ? "Time's up" : formatDuration(left)}
         </span>
       )}
+      {w.lock && <span role="status" style={{ fontWeight: 600 }}>{w.iLocked ? "You locked the board. Only you can edit." : `${w.lock.name} locked the board. It's read-only until they unlock it.`}</span>}
+      {w.privateMode && <span role="status" style={{ fontWeight: 600 }}>{w.iStartedPrivate ? "Private mode is on. People see only their own notes." : `${w.privateMode.name} started private mode. You see only your own notes until they reveal.`}</span>}
       {w.canFacilitate && (
         <>
+          {w.lock ? (w.iLocked && <button onClick={w.unlockBoard}>Unlock board</button>) : <button onClick={w.lockBoard}>Lock board</button>}
+          {w.privateMode ? (w.iStartedPrivate && <button onClick={w.reveal}>Reveal everyone's notes</button>) : <button onClick={w.startPrivate}>Start private mode</button>}
+          <span aria-hidden>|</span>
           {running
             ? <button onClick={w.stopTimer}>Stop timer</button>
             : <>

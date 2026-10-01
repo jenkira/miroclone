@@ -5,6 +5,8 @@ export const WORKSHOP_MAP = "workshop";
 
 export interface TimerState { endsAt: number; durationMs: number; startedBy: string }
 export interface PresentState { by: string; frameId: string | null; index: number }
+export interface LockState { by: string; name: string }
+export interface PrivateState { by: string; name: string }
 export interface SummonState { x: number; y: number; zoom: number; by: string; at: number }
 
 /**
@@ -17,6 +19,10 @@ export class Workshop {
 
   get timer(): TimerState | undefined { return this.map.get("timer") as TimerState | undefined; }
   get present(): PresentState | undefined { return this.map.get("present") as PresentState | undefined; }
+  /** Who locked the board, if anyone. The collaboration service enforces it, so only the person who locked it can edit (WSH-7). */
+  get lock(): LockState | undefined { return this.map.get("lock") as LockState | undefined; }
+  /** Who turned on private mode, if anyone. Other people see only their own content until it ends (WSH-7). */
+  get privateMode(): PrivateState | undefined { return this.map.get("private") as PrivateState | undefined; }
   get summon(): SummonState | undefined { return this.map.get("summon") as SummonState | undefined; }
 
   /** Starts a countdown. `serverNow` is the server's clock, so every browser agrees on when it ends. */
@@ -32,6 +38,12 @@ export class Workshop {
     if (p) this.map.set("present", { ...p, index, frameId } satisfies PresentState);
   }
   stopPresenting() { this.map.delete("present"); }
+
+  lockBoard(by: string, name: string) { this.map.set("lock", { by, name } satisfies LockState); }
+  unlockBoard() { this.map.delete("lock"); }
+  startPrivate(by: string, name: string) { this.map.set("private", { by, name } satisfies PrivateState); }
+  /** Ends private mode, which reveals everyone's content. */
+  reveal() { this.map.delete("private"); }
 
   /** Asks everyone to move to a view. Each client applies it once, and can then leave it by moving. */
   summonTo(x: number, y: number, zoom: number, by: string, now: number) { this.map.set("summon", { x, y, zoom, by, at: now } satisfies SummonState); }
@@ -93,4 +105,12 @@ export function freshReactions(
     out.push({ clientId, name: String(s.user?.name ?? "Someone").slice(0, 60), emoji: r.emoji, at: r.at });
   }
   return out;
+}
+
+/**
+ * Whether a person sees an object while private mode is on (WSH-7). The facilitator sees everything. Everyone else sees
+ * their own content and what the facilitator added, which includes frames and prompts. Content with no author counts as the facilitator's.
+ */
+export function visibleInPrivateMode(o: { by?: string }, me: string, facilitator: string): boolean {
+  return me === facilitator || !o.by || o.by === me || o.by === facilitator;
 }

@@ -3,6 +3,8 @@ import {
   appendUpdate, compact, Counter, createRegistry, Gauge, Histogram, LATENCY_BUCKETS, loadDoc, withSpan,
   type Db, type Registry, type Tracing,
 } from "@miroclone/server-core";
+import { canEditContent, WORKSHOP_MAP, type BoardRole } from "@miroclone/shared";
+import type { Document } from "@hocuspocus/server";
 import { authenticate, type AccessResolver } from "./auth.js";
 
 /** Update sizes in bytes, from a small edit to a large paste or a restored board. */
@@ -17,6 +19,19 @@ export function createCollabServer(opts: { port: number; resolver: AccessResolve
   const load = reuse("collab_load_seconds", () => new Histogram({ name: "collab_load_seconds", help: "Time to load a board from storage", buckets: LATENCY_BUCKETS, registers: [registry] }));
   const sizes = reuse("collab_update_bytes", () => new Histogram({ name: "collab_update_bytes", help: "Size of each update", buckets: SIZE_BUCKETS, registers: [registry] }));
   const errors = reuse("collab_persist_errors_total", () => new Counter({ name: "collab_persist_errors_total", help: "Updates that could not be stored", registers: [registry] }));
+
+  /**
+   * While a board is locked, only the person who locked it can edit (WSH-7). The lock lives in the document's workshop map,
+   * and this turns every other connection read-only, so the server enforces it and a changed browser can't skip it.
+   * Everyone else keeps the read-only state their role gave them.
+   */
+  const applyLock = (document: Document) => {
+    const lock = document.getMap(WORKSHOP_MAP).get("lock") as { by?: string } | undefined;
+    for (const c of document.getConnections()) {
+      const ctx = c.context as { user?: { id: string }; role?: BoardRole };
+      c.readOnly = !canEditContent(ctx.role ?? "viewer") || (!!lock && ctx.user?.id !== lock.by);
+    }
+  };
 
   const span = <T,>(name: string, fn: () => Promise<T>) => (tracer ? withSpan(tracer, name, {}, fn) : fn());
 
@@ -46,7 +61,22 @@ export function createCollabServer(opts: { port: number; resolver: AccessResolve
         return doc;
       } finally { end(); }
     }),
-    async onChange({ documentName, update }) {
+    // A person who joins while the board is locked is read-only from the start.
+    async connected({ documentName, instance }) { const d = instance.documents.get(documentName); if (d) applyLock(d); },
+    // If the person who locked the board leaves, the lock goes with them. Otherwise a closed laptop would lock everyone out.
+    async onDisconnect({ documentName, instance, context }) {
+      const d = instance.documents.get(documentName);
+      const lock = d?.getMap(WORKSHOP_MAP).get("lock") as { by?: string } | undefined;
+      if (!d || !lock || lock.by !== context?.user?.id) return;
+      if (d.getConnections().some((c) => (c.context as { user?: { id: string } }).user?.id === lock.by)) return;
+      d.getMap(WORKSHOP_MAP).delete("lock");
+      applyLock(d);
+    },
+    async onChange({ documentName, update, document, context }) {
+      // A lock names the person who set it. If it names someone else, it's forged, so remove it.
+      const lock = document.getMap(WORKSHOP_MAP).get("lock") as { by?: string } | undefined;
+      if (lock && context?.user?.id && lock.by !== context.user.id) document.getMap(WORKSHOP_MAP).delete("lock");
+      applyLock(document);
       sizes.observe(update.byteLength);
       await span("collab.persist_update", async () => {
         const end = persist.startTimer();

@@ -26,6 +26,8 @@ const base = {
   index: z.string(),
   locked: z.boolean().default(false),
   groupId: z.string().optional(),
+  /** The user ID of whoever added the object. Private mode uses it to show people their own content (WSH-7). */
+  by: z.string().max(100).optional(),
 };
 
 export const stickySchema = z.object({

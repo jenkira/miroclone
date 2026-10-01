@@ -12,7 +12,13 @@ export class Board {
   /** Tracks only this client's changes, so undo never reverts other users' work (CNV-10). */
   readonly undo: Y.UndoManager;
 
-  constructor(readonly doc: Y.Doc, readonly origin: unknown = "local") {
+  /**
+   * When set, `list()` returns only the objects it accepts. Private mode uses it to hide other people's content on this
+   * client (WSH-7). It filters the view only: the objects are still in the document.
+   */
+  private viewFilter: ((o: BoardObject) => boolean) | null = null;
+
+  constructor(readonly doc: Y.Doc, readonly origin: unknown = "local", readonly author?: string) {
     this.objects = doc.getMap<BoardObject>(OBJECTS_MAP);
     this.undo = new Y.UndoManager(this.objects, { trackedOrigins: new Set([origin]), captureTimeout: 300 });
   }
@@ -32,9 +38,14 @@ export class Board {
 
   get(id: string): BoardObject | undefined { return this.objects.get(id); }
 
-  /** Objects from back to front. */
+  setViewFilter(fn: ((o: BoardObject) => boolean) | null) { this.viewFilter = fn; }
+
+  /** True when this client's view includes the object. */
+  visible(o: BoardObject): boolean { return !this.viewFilter || this.viewFilter(o); }
+
+  /** Objects from back to front, as this client sees them. */
   list(): BoardObject[] {
-    return [...this.objects.values()].sort((a, b) => (a.index < b.index ? -1 : a.index > b.index ? 1 : a.id < b.id ? -1 : 1));
+    return [...this.objects.values()].filter((o) => this.visible(o)).sort((a, b) => (a.index < b.index ? -1 : a.index > b.index ? 1 : a.id < b.id ? -1 : 1));
   }
 
   add(input: Input): BoardObject {
@@ -45,6 +56,8 @@ export class Board {
         id: crypto.randomUUID(),
         x: 0, y: 0, width: 100, height: 100,
         ...input,
+        // Whoever adds an object is its author, even when it's a pasted copy of someone else's.
+        ...(this.author ? { by: this.author } : {}),
         index: generateKeyBetween(top, null),
       });
       this.objects.set(obj.id, obj);
@@ -58,7 +71,7 @@ export class Board {
     return this.step(() => {
       let last = this.list().at(-1)?.index ?? null;
       return inputs.map((input) => {
-        const obj = boardObjectSchema.parse({ id: crypto.randomUUID(), x: 0, y: 0, width: 100, height: 100, ...input, index: (last = generateKeyBetween(last, null)) });
+        const obj = boardObjectSchema.parse({ id: crypto.randomUUID(), x: 0, y: 0, width: 100, height: 100, ...input, ...(this.author ? { by: this.author } : {}), index: (last = generateKeyBetween(last, null)) });
         this.objects.set(obj.id, obj);
         return obj;
       });

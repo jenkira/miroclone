@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import * as Y from "yjs";
-import { clockOffset, formatDuration, freshReactions, isReaction, timerRemaining, Workshop } from "./workshop-state.js";
+import { clockOffset, formatDuration, freshReactions, isReaction, timerRemaining, visibleInPrivateMode, Workshop } from "./workshop-state.js";
 
 describe("timer", () => {
   it("counts down to zero and stays there", () => {
@@ -121,5 +121,26 @@ describe("reactions (WSH-6)", () => {
     const r = freshReactions(s, new Map(), 100_500, 1);
     expect(r.map((x) => x.clientId)).toEqual([5]);
     expect(r[0]!.name).toHaveLength(60);
+  });
+});
+
+describe("lock and private mode (WSH-7)", () => {
+  it("records who locked the board and who started private mode, and clears them", () => {
+    const w = new Workshop(new Y.Doc());
+    expect(w.lock).toBeUndefined();
+    w.lockBoard("u1", "Ann");
+    w.startPrivate("u1", "Ann");
+    expect(w.lock).toEqual({ by: "u1", name: "Ann" });
+    expect(w.privateMode).toEqual({ by: "u1", name: "Ann" });
+    w.unlockBoard(); w.reveal();
+    expect(w.lock).toBeUndefined();
+    expect(w.privateMode).toBeUndefined();
+  });
+  it("shows people their own content and the facilitator's in private mode", () => {
+    expect(visibleInPrivateMode({ by: "me" }, "me", "fac")).toBe(true);
+    expect(visibleInPrivateMode({ by: "fac" }, "me", "fac")).toBe(true);
+    expect(visibleInPrivateMode({}, "me", "fac")).toBe(true);
+    expect(visibleInPrivateMode({ by: "other" }, "me", "fac")).toBe(false);
+    expect(visibleInPrivateMode({ by: "other" }, "fac", "fac")).toBe(true);
   });
 });

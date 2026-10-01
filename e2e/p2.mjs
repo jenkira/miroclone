@@ -104,6 +104,47 @@ await ann.page.waitForSelector("canvas");
 await ann.page.waitForFunction(() => !document.body.innerText.includes("This board is archived"));
 check("the owner restores it from the board", !(await ann.page.getByRole("button", { name: "Sticky note" }).isDisabled()));
 
+// 5. Lock and private mode (WSH-7)
+const eve = await login("eve");
+await call(ann.page, "PUT", `/api/boards/${id}/members`, { type: "user", principalId: bob.me.id, role: "editor", name: "Bob" });
+await call(ann.page, "PUT", `/api/boards/${id}/members`, { type: "user", principalId: eve.me.id, role: "editor", name: "Eve" });
+const open = async (who) => { await who.page.goto(`${APP}/#/board/${id}`); await who.page.reload(); await who.page.waitForSelector("canvas"); await who.page.waitForFunction(() => window.__provider?.synced); };
+await Promise.all([open(ann), open(bob), open(eve)]);
+const count = (who) => who.page.evaluate(() => window.__board.list().filter((o) => o.type === "sticky").length);
+await ann.page.getByRole("button", { name: "Lock board" }).click();
+await bob.page.getByText("Ann Author locked the board").waitFor({ timeout: 8000 });
+check("when the owner locks the board, the others see who locked it", true);
+check("and their tools turn off", await bob.page.getByRole("button", { name: "Sticky note" }).isDisabled());
+await bob.page.evaluate(() => window.__board.add({ type: "sticky", text: "bob while locked" }));
+await ann.page.waitForTimeout(800);
+check("an edit forced in during the lock never reaches the owner", (await count(ann)) === 0);
+await ann.page.evaluate(() => window.__board.add({ type: "sticky", text: "ann while locked" }));
+await eve.page.waitForFunction(() => window.__board.list().some((o) => o.text === "ann while locked"), null, { timeout: 8000 });
+check("the owner can still edit, and others see it", true);
+await ann.page.getByRole("button", { name: "Unlock board" }).click();
+await bob.page.getByRole("button", { name: "Sticky note" }).waitFor();
+await bob.page.waitForFunction(() => !document.body.innerText.includes("locked the board"));
+check("unlocking gives the tools back", !(await bob.page.getByRole("button", { name: "Sticky note" }).isDisabled()));
+// Bob's forced edit stays in his own browser, and his offline cache sends it once the lock ends. It's his own note.
+await open(bob);
+
+await ann.page.getByRole("button", { name: "Start private mode" }).click();
+await bob.page.getByText("Ann Author started private mode").waitFor({ timeout: 8000 });
+await eve.page.getByText("Ann Author started private mode").waitFor({ timeout: 8000 });
+await bob.page.evaluate(() => window.__board.add({ type: "sticky", text: "bob's idea" }));
+await eve.page.evaluate(() => window.__board.add({ type: "sticky", text: "eve's idea" }));
+await ann.page.waitForFunction(() => ["bob's idea", "eve's idea"].every((t) => window.__board.list().some((o) => o.text === t)), null, { timeout: 8000 });
+check("the facilitator sees everyone's notes", true);
+await bob.page.waitForTimeout(800);
+const bobSees = await bob.page.evaluate(() => window.__board.list().map((o) => o.text).sort());
+check("another editor sees their own and the facilitator's, not other people's", JSON.stringify(bobSees) === JSON.stringify(["ann while locked", "bob while locked", "bob's idea"]), JSON.stringify(bobSees));
+const eveSees = await eve.page.evaluate(() => window.__board.list().map((o) => o.text).sort());
+check("and the others do the same", JSON.stringify(eveSees) === JSON.stringify(["ann while locked", "eve's idea"]), JSON.stringify(eveSees));
+check("the board list, which exports and the minimap read, leaves out hidden notes", (await bob.page.evaluate(() => window.__board.list().length)) === 3);
+await ann.page.getByRole("button", { name: "Reveal everyone's notes" }).click();
+await bob.page.waitForFunction(() => window.__board.list().some((o) => o.text === "eve's idea"), null, { timeout: 8000 });
+check("revealing shows everyone's notes to everyone", (await bob.page.evaluate(() => window.__board.list().length)) === 4);
+
 await browser.close();
 const failed = res.filter((r) => !r).length;
 console.log(`\n${res.length - failed}/${res.length} passed`);

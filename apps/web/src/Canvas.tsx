@@ -30,6 +30,8 @@ export interface CanvasApi {
   size(): { width: number; height: number };
   /** Sets the viewport, as when following another person (COL-6). It isn't reported as the user's own move. */
   setViewport(v: Viewport): void;
+  /** Redraws every object, as when private mode starts or ends and the visible set changes (WSH-7). */
+  refresh(): void;
   /** Converts a world point to a point on screen, relative to the page. */
   toScreen(p: Point): Point;
 }
@@ -223,6 +225,7 @@ export function Canvas({ board, tool, readOnly, awareness, onToolDone, apiRef, o
         showRect: (r) => { source = "api"; showRect(r); },
         viewport: () => ({ ...view.current }),
         size: () => ({ width: el.clientWidth, height: el.clientHeight }),
+        refresh: () => { scene.rebuild(); setSel(selection.current.filter((id) => { const o = board.get(id); return !!o && board.visible(o); })); cull(); },
         setViewport: (v) => { view.current = { ...v }; source = "api"; apply(); },
         toScreen: (p) => { const b = el.getBoundingClientRect(); return { x: b.left + p.x * view.current.zoom + view.current.x, y: b.top + p.y * view.current.zoom + view.current.y }; },
         viewCentre: () => screenToWorld(view.current, el.clientWidth / 2, el.clientHeight / 2),

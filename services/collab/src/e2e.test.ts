@@ -10,7 +10,7 @@ import { createRegistry } from "@miroclone/server-core";
 import { createCollabServer } from "./server.js";
 
 // The cookie value names the user, and each user has a fixed role.
-const roles: Record<string, BoardRole | undefined> = { editor: "editor", viewer: "viewer", nobody: undefined };
+const roles: Record<string, BoardRole | undefined> = { editor: "editor", editor2: "editor", viewer: "viewer", nobody: undefined };
 const resolver: AccessResolver = {
   userFromCookie: async (c) => (c ? { id: c, name: c, groups: [] } : undefined),
   roleOnBoard: async (u) => roles[u.id],
@@ -75,6 +75,83 @@ describe("collaboration over WebSocket", () => {
     await n.denied;
     expect(n.doc.getMap("objects").size).toBe(0);
     close(n);
+  });
+});
+
+describe("locking the board (WSH-7)", () => {
+  const setLock = (c: ReturnType<typeof connect>, by: string | null) => (by ? c.doc.getMap("workshop").set("lock", { by, name: by }) : c.doc.getMap("workshop").delete("lock"));
+
+  it("makes every other editor read-only until the person who locked it unlocks", async () => {
+    const a = connect("editor"); await a.synced;
+    const b = connect("editor2"); await b.synced;
+    const v = connect("viewer"); await v.synced;
+    setLock(a, "editor");
+    await wait(400);
+    expect(b.doc.getMap("workshop").get("lock")).toEqual({ by: "editor", name: "editor" });
+    b.doc.getMap("objects").set("blocked", { t: "x" });
+    await wait(400);
+    expect(a.doc.getMap("objects").get("blocked")).toBeUndefined();
+    a.doc.getMap("objects").set("allowed", { t: "x" });
+    await wait(400);
+    expect(v.doc.getMap("objects").get("allowed")).toEqual({ t: "x" });
+
+    // Another editor can't lift the lock.
+    setLock(b, null);
+    await wait(400);
+    expect(a.doc.getMap("workshop").get("lock")).toBeDefined();
+
+    setLock(a, null);
+    await wait(400);
+    // The real client turns its tools off during a lock. This test edited anyway, which leaves a gap in its own history,
+    // so it checks the unlocked board with a fresh connection.
+    const b2 = connect("editor2"); await b2.synced;
+    b2.doc.getMap("objects").set("after", { t: "x" });
+    await wait(400);
+    expect(a.doc.getMap("objects").get("after")).toEqual({ t: "x" });
+    close(a, b, v, b2);
+  });
+
+  it("makes a person who joins during the lock read-only", async () => {
+    const a = connect("editor"); await a.synced;
+    setLock(a, "editor");
+    await wait(400);
+    const late = connect("editor2"); await late.synced;
+    late.doc.getMap("objects").set("late", { t: "x" });
+    await wait(400);
+    expect(a.doc.getMap("objects").get("late")).toBeUndefined();
+    setLock(a, null);
+    await wait(300);
+    close(a, late);
+  });
+
+  it("ends the lock when the person who set it leaves", async () => {
+    const a = connect("editor"); await a.synced;
+    const b = connect("editor2"); await b.synced;
+    setLock(a, "editor");
+    await wait(400);
+    expect(b.doc.getMap("workshop").get("lock")).toBeDefined();
+    close(a);
+    await wait(800);
+    expect(b.doc.getMap("workshop").get("lock")).toBeUndefined();
+    close(b);
+    const c = connect("editor2"); await c.synced;
+    c.doc.getMap("objects").set("free", { t: "x" });
+    await wait(400);
+    const d = connect("editor"); await d.synced;
+    expect(d.doc.getMap("objects").get("free")).toEqual({ t: "x" });
+    close(c, d);
+  });
+
+  it("removes a lock that names someone else", async () => {
+    const a = connect("editor"); await a.synced;
+    const b = connect("editor2"); await b.synced;
+    setLock(b, "editor");
+    await wait(500);
+    expect(a.doc.getMap("workshop").get("lock")).toBeUndefined();
+    b.doc.getMap("objects").set("still", { t: "x" });
+    await wait(400);
+    expect(a.doc.getMap("objects").get("still")).toEqual({ t: "x" });
+    close(a, b);
   });
 });
 

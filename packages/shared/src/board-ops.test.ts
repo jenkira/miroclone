@@ -180,3 +180,29 @@ describe("addMany", () => {
     expect(b.list()).toHaveLength(0);
   });
 });
+
+describe("authors and the view filter (WSH-7)", () => {
+  it("records the author on every object the client adds, including pasted copies", () => {
+    const doc = new Y.Doc();
+    const ann = new Board(doc, "a", "ann"), bob = new Board(doc, "b", "bob");
+    const note = ann.add({ type: "sticky", text: "x" });
+    expect(note.by).toBe("ann");
+    const [copy] = bob.paste([note]);
+    expect(bob.get(copy!)!.by).toBe("bob");
+    expect(ann.addMany([{ type: "sticky" }])[0]!.by).toBe("ann");
+  });
+  it("leaves the author off when the board has none", () => {
+    expect(new Board(new Y.Doc()).add({ type: "sticky" }).by).toBeUndefined();
+  });
+  it("hides objects from list() while a filter is set, and not from get()", () => {
+    const doc = new Y.Doc();
+    const ann = new Board(doc, "a", "ann"), bob = new Board(doc, "b", "bob");
+    const a = ann.add({ type: "sticky", text: "ann's" }), b = bob.add({ type: "sticky", text: "bob's" });
+    ann.setViewFilter((o) => o.by === "ann");
+    expect(ann.list().map((o) => o.id)).toEqual([a.id]);
+    expect(ann.get(b.id)).toBeDefined();
+    expect(bob.list()).toHaveLength(2);
+    ann.setViewFilter(null);
+    expect(ann.list()).toHaveLength(2);
+  });
+});

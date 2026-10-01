@@ -205,12 +205,14 @@ export class Scene {
       }
       const o = this.board.get(id);
       if (!o) continue;
+      // Private mode hides other people's objects from this view (WSH-7).
+      if (!this.board.visible(o)) { this.nodes.get(id)?.node.destroy({ children: true }); this.nodes.delete(id); continue; }
       const prev = change.oldValue as BoardObject | undefined;
       if (change.action === "add" || prev?.index !== o.index) reorder = true;
       this.put(o);
     }
     // A connector follows its objects, so redraw all of them after any change.
-    for (const [id, n] of this.nodes) if (n.connector) { const o = this.board.get(id); if (o) this.put(o); }
+    for (const [id, n] of this.nodes) if (n.connector) { const o = this.board.get(id); if (o && this.board.visible(o)) this.put(o); }
     if (reorder) this.layer.removeChildren(), this.board.list().forEach((o) => { const n = this.nodes.get(o.id); if (n) this.layer.addChild(n.node); });
   }
 

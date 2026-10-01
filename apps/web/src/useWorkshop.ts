@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type * as Y from "yjs";
 import type { Awareness } from "y-protocols/awareness";
-import { clockOffset, frameOrder, timerRemaining, Workshop, type Board } from "@miroclone/shared";
+import { clockOffset, frameOrder, timerRemaining, visibleInPrivateMode, Workshop, type Board } from "@miroclone/shared";
 import { api } from "./api.js";
 import type { CanvasApi } from "./Canvas.js";
 import type { Viewport } from "./viewport.js";
@@ -10,7 +10,7 @@ import type { Viewport } from "./viewport.js";
  * Timer, presentation, follow mode, and summon (WSH-3, WSH-5, COL-6). The state lives in the board's shared document,
  * so only editors can change it and everyone sees the same thing.
  */
-export function useWorkshop(o: { doc: Y.Doc; board: Board; awareness?: Awareness; me: { name: string }; canFacilitate: boolean; apiRef: { current: CanvasApi | null } }) {
+export function useWorkshop(o: { doc: Y.Doc; board: Board; awareness?: Awareness; me: { id: string; name: string }; canFacilitate: boolean; apiRef: { current: CanvasApi | null } }) {
   const { doc, board, awareness, me, canFacilitate, apiRef } = o;
   const workshop = useMemo(() => new Workshop(doc), [doc]);
   const [, bump] = useState(0);
@@ -42,6 +42,16 @@ export function useWorkshop(o: { doc: Y.Doc; board: Board; awareness?: Awareness
     return () => { stopped = true; window.clearInterval(t); };
   }, []);
   const serverNow = () => Date.now() + offsetRef.current;
+
+  // Lock and private mode (WSH-7). The collaboration service enforces the lock. Private mode hides content in this view only.
+  const lock = workshop.lock;
+  const lockedByOther = !!lock && lock.by !== me.id;
+  const priv = workshop.privateMode;
+  useEffect(() => {
+    board.setViewFilter(priv ? (o) => visibleInPrivateMode(o, me.id, priv.by) : null);
+    apiRef.current?.refresh();
+    return () => board.setViewFilter(null);
+  }, [priv?.by, board, me.id]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   const frames = frameOrder(board.list());
   const present = workshop.present;
@@ -155,5 +165,8 @@ export function useWorkshop(o: { doc: Y.Doc; board: Board; awareness?: Awareness
     startPresenting: start, stopPresenting: stop, next: () => go(1), prev: () => go(-1),
     followPresenter, setFollowPresenter, followId, setFollowId, summon, onViewChange, notice, clearNotice: () => setNotice(""),
     canFacilitate,
+    lock, lockedByOther, iLocked: !!lock && lock.by === me.id, privateMode: priv, iStartedPrivate: !!priv && priv.by === me.id,
+    lockBoard: () => workshop.lockBoard(me.id, me.name), unlockBoard: () => workshop.unlockBoard(),
+    startPrivate: () => workshop.startPrivate(me.id, me.name), reveal: () => workshop.reveal(),
   };
 }

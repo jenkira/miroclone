@@ -71,11 +71,11 @@ export function BoardView({ id, me }: { id: string; me: Me }) {
     // The session cookie is the credential. The provider needs some token, or the server never starts authentication.
     const provider = new HocuspocusProvider({ name: id, document: doc, websocketProvider: socket, token: "cookie" });
     provider.awareness?.setLocalStateField("user", { name: me.name, colour: colourFor(doc.clientID) });
-    const board = new Board(doc, doc.clientID);
+    const board = new Board(doc, doc.clientID, me.id);
     // End-to-end tests read the board through this hook. It exists only in the development server.
     if (import.meta.env.DEV) Object.assign(window, { __board: board, __provider: provider, __api: apiRef });
     return { doc, provider, socket, board };
-  }, [id, me.name]);
+  }, [id, me.name, me.id]);
 
   useEffect(() => {
     const { provider, socket, doc } = session;
@@ -102,7 +102,8 @@ export function BoardView({ id, me }: { id: string; me: Me }) {
 
   if (error) return <p role="alert">{error}</p>;
   if (!meta) return <p>Loading board…</p>;
-  const readOnly = meta.role === "viewer" || meta.role === "commenter";
+  // A locked board is read-only for everyone except the person who locked it (WSH-7).
+  const readOnly = meta.role === "viewer" || meta.role === "commenter" || w.lockedByOther;
   const canComment = meta.role !== "viewer";
   const canModerate = meta.role === "owner" || meta.role === "editor";
 
