@@ -17,6 +17,7 @@ export interface BoardRow {
   role: BoardRole;
   starred: boolean;
   space_id: string | null;
+  archived_at: string | null;
 }
 
 
@@ -54,12 +55,12 @@ export async function createBoard(db: Db, actor: Actor, title: string, classific
   return id;
 }
 
-export type BoardFilter = "recent" | "owned" | "shared" | "starred" | "deleted";
+export type BoardFilter = "recent" | "owned" | "shared" | "starred" | "deleted" | "archived";
 
 /** Lists the boards a user can open, for the dashboard (BRD-2). */
 export async function listBoards(db: Db, actor: Actor, filter: BoardFilter = "recent"): Promise<BoardRow[]> {
   const { rows } = await db.query<BoardRow>(
-    `SELECT b.id, b.title, b.classification, b.created_by, b.updated_at, b.deleted_at, b.space_id,
+    `SELECT b.id, b.title, b.classification, b.created_by, b.updated_at, b.deleted_at, b.space_id, b.archived_at,
             (SELECT role FROM (
                SELECT m.role, CASE m.role WHEN 'owner' THEN 4 WHEN 'editor' THEN 3 WHEN 'commenter' THEN 2 ELSE 1 END AS r
                FROM board_access m WHERE m.board_id = b.id AND (
@@ -72,7 +73,7 @@ export async function listBoards(db: Db, actor: Actor, filter: BoardFilter = "re
      WHERE EXISTS (SELECT 1 FROM board_access m WHERE m.board_id = b.id AND (
              (m.principal_type = 'user' AND m.principal_id = $1) OR
              (m.principal_type = 'group' AND m.principal_id = ANY($2::text[]))))
-       AND ${filter === "deleted" ? "b.deleted_at IS NOT NULL AND b.created_by = $1" : "b.deleted_at IS NULL"}
+       AND ${filter === "deleted" ? "b.deleted_at IS NOT NULL AND b.created_by = $1" : filter === "archived" ? "b.deleted_at IS NULL AND b.archived_at IS NOT NULL" : "b.deleted_at IS NULL AND b.archived_at IS NULL"}
      ORDER BY b.updated_at DESC`,
     [actor.id, actor.groups],
   );
@@ -91,7 +92,10 @@ export async function renameBoard(db: Db, actor: Actor, id: string, title: strin
 
 /** Moves a board to the recycle bin (BRD-1). Only owners can delete. */
 export async function deleteBoard(db: Db, actor: Actor, id: string) {
-  await require(db, actor, id, "owner");
+  // An owner can delete a board that is archived, so the check ignores the archive.
+  const role = await roleOnBoard(db, actor, id, { ignoreArchive: true });
+  if (!role) throw new NotFound();
+  if (!atLeast(role, "owner")) throw new Forbidden();
   await db.query("UPDATE boards SET deleted_at = now() WHERE id = $1", [id]);
 }
 
@@ -238,4 +242,14 @@ export async function setMarkers(db: Db, actor: Actor, id: string, markers: unkn
   if (bad) throw new Invalid(`${bad} isn't a configured marker.`);
   await db.query("UPDATE boards SET markers = $2 WHERE id = $1", [id, unique]);
   return unique;
+}
+
+/** Archives a board by hand, or restores it (ADM-4). Only an owner can, and restoring starts the retention clock again. */
+export async function setArchived(db: Db, actor: Actor, id: string, archived: boolean) {
+  const role = await roleOnBoard(db, actor, id, { ignoreArchive: true });
+  if (!role) throw new NotFound();
+  if (!atLeast(role, "owner")) throw new Forbidden();
+  await db.query(
+    archived ? "UPDATE boards SET archived_at = COALESCE(archived_at, now()) WHERE id = $1"
+             : "UPDATE boards SET archived_at = NULL, last_opened_at = now() WHERE id = $1", [id]);
 }

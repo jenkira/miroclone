@@ -14,6 +14,8 @@ export type AuditAction =
   | "vote_close"
   | "version_create"
   | "version_restore"
+  | "archive"
+  | "unarchive"
   | "delete";
 
 export interface AuditEvent {

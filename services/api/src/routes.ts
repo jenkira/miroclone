@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import * as Y from "yjs";
 import { atLeast, boardRoles, builtinTemplates, compareClassification, exportSvg, importJson, isDowngrade, OBJECTS_MAP, type BoardRole } from "@miroclone/shared";
-import { appendUpdate, deleteVersion, loadDoc, listVersions, openTokens, sealTokens, searchBoards, snapshot, versionState } from "@miroclone/server-core";
+import { appendUpdate, deleteVersion, loadDoc, loadRetention, saveRetention, listVersions, openTokens, sealTokens, searchBoards, snapshot, versionState } from "@miroclone/server-core";
 import { createHash, randomUUID } from "node:crypto";
 import type { GraphClient } from "./graph.js";
 import { detectImageType, MAX_UPLOAD_BYTES, svgProblem } from "./files.js";
@@ -187,10 +187,14 @@ export function boardRoutes(app: FastifyInstance, opts: { db: Db; sessions: Sess
     api.get<{ Params: { id: string } }>("/api/boards/:id", async (req) => {
       const role = await boards.roleOnBoard(db, actorOf(req), req.params.id);
       if (!role) throw new boards.NotFound();
-      const { rows } = await db.query("SELECT id, title, classification, markers, updated_at FROM boards WHERE id = $1", [req.params.id]);
+      const { rows } = await db.query("SELECT id, title, classification, markers, updated_at, archived_at FROM boards WHERE id = $1", [req.params.id]);
       audit({ action: "board_access", actor: req.session!.userId, boardId: req.params.id });
+      // Opening a board restarts its retention clock. Updating at most once an hour keeps this cheap.
+      await db.query("UPDATE boards SET last_opened_at = now() WHERE id = $1 AND last_opened_at < now() - interval '1 hour'", [req.params.id]);
       await comments.recordParticipant(db, req.params.id, req.session!.userId);
-      return { ...rows[0], role };
+      // An archived board is read-only, but its owner can still restore it, and the page needs to know that.
+      const canRestore = !!rows[0]?.archived_at && (await boards.roleOnBoard(db, actorOf(req), req.params.id, { ignoreArchive: true })) === "owner";
+      return { ...rows[0], role, canRestore };
     });
 
     api.patch<{ Params: { id: string }; Body: { title: string } }>("/api/boards/:id", async (req) => {
@@ -270,6 +274,26 @@ export function boardRoutes(app: FastifyInstance, opts: { db: Db; sessions: Sess
         .header("content-security-policy", "default-src 'none'; style-src 'unsafe-inline'; sandbox")
         .header("cache-control", "private, max-age=60")
         .send(svg);
+    });
+
+    // Retention (ADM-4). The worker archives boards that nobody has opened for the configured time.
+    api.get("/api/admin/retention", async (req) => { adminOnly(req); return loadRetention(db); });
+    api.put<{ Body: unknown }>("/api/admin/retention", async (req) => {
+      adminOnly(req);
+      let saved;
+      try { saved = await saveRetention(db, req.session!.userId, req.body); } catch (e) { throw new boards.Invalid((e as Error).message); }
+      audit({ action: "settings_change", actor: req.session!.userId, detail: { setting: "retention", ...saved } });
+      return saved;
+    });
+    api.post<{ Params: { id: string } }>("/api/boards/:id/archive", async (req) => {
+      await boards.setArchived(db, actorOf(req), req.params.id, true);
+      audit({ action: "archive", actor: req.session!.userId, boardId: req.params.id });
+      return { ok: true };
+    });
+    api.post<{ Params: { id: string } }>("/api/boards/:id/unarchive", async (req) => {
+      await boards.setArchived(db, actorOf(req), req.params.id, false);
+      audit({ action: "unarchive", actor: req.session!.userId, boardId: req.params.id });
+      return { ok: true };
     });
 
     // Organisation-wide visibility (IAM-8).

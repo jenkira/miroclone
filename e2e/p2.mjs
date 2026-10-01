@@ -80,6 +80,30 @@ check("the thumbnail still loads", svg === 200);
 await call(ann.page, "PUT", `/api/boards/${id}/markers`, { markers: [] });
 await call(ada.page, "PUT", "/api/admin/markers", []);
 
+// 4. Retention and archiving (ADM-4)
+await ada.page.goto(`${APP}/#/admin`);
+await ada.page.reload();
+await ada.page.getByLabel("Archive unopened boards").check();
+await ada.page.getByRole("spinbutton", { name: /after/ }).fill("6");
+await ada.page.getByRole("button", { name: "Save retention rule" }).click();
+await ada.page.getByRole("status").filter({ hasText: "Saved." }).first().waitFor();
+check("the administrator sets the retention rule", (await call(ada.page, "GET", "/api/admin/retention")).body.archiveAfterMonths === 6);
+await call(ada.page, "PUT", "/api/admin/retention", { archiveAfterMonths: null });
+await ann.page.goto(APP + "/");
+ann.page.once("dialog", (d) => d.accept());
+await ann.page.getByRole("listitem").filter({ hasText: `P2 ${RUN}` }).getByRole("button", { name: "Archive" }).click();
+await ann.page.getByRole("button", { name: "Archived" }).click();
+const row = ann.page.getByRole("listitem").filter({ hasText: `P2 ${RUN}` });
+await row.getByRole("button", { name: "Restore from archive" }).waitFor();
+check("an owner archives a board, and finds it under Archived", true);
+await ann.page.goto(`${APP}/#/board/${id}`);
+await ann.page.getByText("This board is archived, so it's read-only.").waitFor();
+check("an archived board says so, and its tools are off", await ann.page.getByRole("button", { name: "Sticky note" }).isDisabled());
+await ann.page.getByRole("button", { name: "Restore from archive" }).click();
+await ann.page.waitForSelector("canvas");
+await ann.page.waitForFunction(() => !document.body.innerText.includes("This board is archived"));
+check("the owner restores it from the board", !(await ann.page.getByRole("button", { name: "Sticky note" }).isDisabled()));
+
 await browser.close();
 const failed = res.filter((r) => !r).length;
 console.log(`\n${res.length - failed}/${res.length} passed`);

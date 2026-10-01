@@ -24,7 +24,7 @@ export interface UsageStats {
   storage: { documentBytes: number; versionBytes: number; fileBytes: number; fileCount: number };
   activity: { comments: number; templates: number };
 }
-export interface BoardSummary { id: string; title: string; classification: string; markers?: string[]; role: string; starred: boolean; updated_at: string; space_id?: string | null }
+export interface BoardSummary { id: string; title: string; classification: string; markers?: string[]; archived_at?: string | null; canRestore?: boolean; role: string; starred: boolean; updated_at: string; space_id?: string | null }
 export interface Space { id: string; name: string; role: string; boards: number }
 
 async function call<T>(method: string, url: string, body?: unknown): Promise<T> {
@@ -94,6 +94,10 @@ export const api = {
   closeVoting: (id: string) => call<VoteState>("POST", `/api/boards/${id}/votes/close`),
   castVote: (id: string, objectId: string) => call<VoteState>("POST", `/api/boards/${id}/votes`, { objectId }),
   removeVote: (id: string, objectId: string) => call<VoteState>("DELETE", `/api/boards/${id}/votes`, { objectId }),
+  retention: () => call<{ archiveAfterMonths: number | null }>("GET", "/api/admin/retention"),
+  saveRetention: (archiveAfterMonths: number | null) => call<{ archiveAfterMonths: number | null }>("PUT", "/api/admin/retention", { archiveAfterMonths }),
+  archiveBoard: (id: string) => call<unknown>("POST", `/api/boards/${id}/archive`),
+  unarchiveBoard: (id: string) => call<unknown>("POST", `/api/boards/${id}/unarchive`),
   markers: () => call<MarkerDef[]>("GET", "/api/markers"),
   saveMarkerList: (list: MarkerDef[]) => call<MarkerDef[]>("PUT", "/api/admin/markers", list),
   setBoardMarkers: (id: string, markers: string[]) => call<{ markers: string[] }>("PUT", `/api/boards/${id}/markers`, { markers }),

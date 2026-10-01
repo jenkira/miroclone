@@ -12,12 +12,15 @@ export function AdminPage() {
   const [message, setMessage] = useState("");
   const [markers, setMarkers] = useState<MarkerDef[] | null>(null);
   const [markerMessage, setMarkerMessage] = useState("");
+  const [months, setMonths] = useState<number | null | undefined>(undefined);
+  const [retentionMessage, setRetentionMessage] = useState("");
   const [forbidden, setForbidden] = useState(false);
 
   useEffect(() => {
     api.stats().then(setStats).catch((e) => { if (e.status === 403) setForbidden(true); });
     api.classifications().then(setCfg).catch(() => {});
     api.markers().then(setMarkers).catch(() => {});
+    api.retention().then((r) => setMonths(r.archiveAfterMonths)).catch(() => {});
   }, []);
 
   if (forbidden) return <main><p role="alert">Only a service administrator can open this page. <a href="#/">Back to boards</a></p></main>;
@@ -85,6 +88,24 @@ export function AdminPage() {
           <p role="status">{message}</p>
         </>
       )}
+      <h2>Retention</h2>
+      {months !== undefined && (
+        <>
+          <p>Archive boards that nobody has opened for a set time. An archived board is read-only until its owner restores it, and the recycle bin rules still apply to deleted boards.</p>
+          <label>
+            <input type="checkbox" checked={months !== null} onChange={(e) => setMonths(e.target.checked ? 12 : null)} /> Archive unopened boards
+          </label>{" "}
+          <label>after{" "}
+            <input type="number" min={1} max={120} value={months ?? 12} disabled={months === null} style={{ width: 64 }} onChange={(e) => setMonths(Math.max(1, Math.min(120, Math.round(Number(e.target.value)) || 1)))} /> months
+          </label>{" "}
+          <button onClick={async () => {
+            setRetentionMessage("");
+            try { await api.saveRetention(months); setRetentionMessage("Saved."); } catch { setRetentionMessage("The rule wasn't saved."); }
+          }}>Save retention rule</button>
+          <p role="status">{retentionMessage}</p>
+        </>
+      )}
+
       <h2>Markers and caveats</h2>
       {markers && (
         <>

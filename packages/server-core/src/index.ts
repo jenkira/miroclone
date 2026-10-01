@@ -10,3 +10,4 @@ export * from "./objectstore.js";
 export * from "./purge.js";
 export * from "./metrics.js";
 export * from "./tracing.js";
+export * from "./retention.js";

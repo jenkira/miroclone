@@ -1,7 +1,8 @@
+import { archiveStaleBoards } from "@miroclone/server-core";
 import type { EntraClaims } from "@miroclone/shared";
 import { describe, expect, it } from "vitest";
 import { SESSION_COOKIE } from "./app.js";
-import { setup, signIn } from "./testutil.js";
+import { db, setup, signIn } from "./testutil.js";
 
 const claims = (oid: string, isAdmin = false): EntraClaims => ({ oid, tid: "t1", name: oid, roles: [isAdmin ? "Whiteboard.Admin" : "Whiteboard.User"], amr: ["mfa"], groups: [] });
 async function user(oid: string, isAdmin = false) {
@@ -175,5 +176,77 @@ describe("markers and caveats (PMK-6)", () => {
     // The first test's board still carries CABINET, so it stays in the list. Once nothing carries a marker, it can go.
     expect((await admin.call("PUT", "/api/admin/markers", [{ key: "CABINET", label: "Cabinet" }, { key: "A", label: "A" }])).statusCode).toBe(200);
     expect((await admin.call("PUT", "/api/admin/markers", [{ key: "CABINET", label: "Cabinet" }, { key: "A", label: "A" }, { key: "A", label: "B" }])).statusCode).toBe(400);
+  });
+});
+
+describe("retention and archiving (ADM-4)", () => {
+  const age = (id: string, months: number) => db.query("UPDATE boards SET last_opened_at = now() - ($2 || ' months')::interval WHERE id = $1", [id, String(months)]);
+
+  it("is set by administrators only, and takes a whole number of months or off", async () => {
+    const admin = await user("rt-admin", true), plain = await user("rt-plain");
+    expect((await plain.call("PUT", "/api/admin/retention", { archiveAfterMonths: 12 })).statusCode).toBe(403);
+    for (const bad of [0, -1, 1.5, 121, "12"]) expect((await admin.call("PUT", "/api/admin/retention", { archiveAfterMonths: bad })).statusCode).toBe(400);
+    expect((await admin.call("PUT", "/api/admin/retention", { archiveAfterMonths: 12 })).json()).toEqual({ archiveAfterMonths: 12 });
+    expect((await admin.call("GET", "/api/admin/retention")).json()).toEqual({ archiveAfterMonths: 12 });
+    await admin.call("PUT", "/api/admin/retention", { archiveAfterMonths: null });
+  });
+
+  it("archives only boards nobody has opened for the time, and not when the rule is off", async () => {
+    const admin = await user("rt-admin2", true), owner = await user("rt-owner");
+    const stale = await mk(owner), fresh = await mk(owner), binned = await mk(owner);
+    await age(stale, 14); await age(fresh, 2); await age(binned, 14);
+    await owner.call("DELETE", `/api/boards/${binned}`);
+    await admin.call("PUT", "/api/admin/retention", { archiveAfterMonths: null });
+    expect(await archiveStaleBoards(db)).toEqual([]);
+    await admin.call("PUT", "/api/admin/retention", { archiveAfterMonths: 12 });
+    expect(await archiveStaleBoards(db)).toContain(stale);
+    const archived = await archiveStaleBoards(db);
+    expect(archived).not.toContain(fresh);
+    expect(archived).not.toContain(binned);
+    const rows = (await db.query<{ id: string; archived_at: string | null }>("SELECT id, archived_at FROM boards WHERE id = ANY($1::uuid[])", [[stale, fresh, binned]])).rows;
+    expect(rows.find((r) => r.id === stale)!.archived_at).not.toBeNull();
+    expect(rows.find((r) => r.id === fresh)!.archived_at).toBeNull();
+    expect(rows.find((r) => r.id === binned)!.archived_at).toBeNull();
+    await admin.call("PUT", "/api/admin/retention", { archiveAfterMonths: null });
+  });
+
+  it("makes an archived board read-only for everyone, hides it from the default lists, and lets its owner restore it", async () => {
+    const owner = await user("rt-owner2"), editor = await user("rt-editor2");
+    const id = await mk(owner);
+    await share(owner, id, editor.oid, "editor");
+    expect((await owner.call("POST", `/api/boards/${id}/archive`)).statusCode).toBe(200);
+    expect((await owner.call("GET", `/api/boards/${id}`)).json()).toMatchObject({ role: "viewer", canRestore: true });
+    expect((await editor.call("GET", `/api/boards/${id}`)).json()).toMatchObject({ role: "viewer", canRestore: false });
+    expect((await owner.call("PATCH", `/api/boards/${id}`, { title: "No" })).statusCode).toBe(403);
+    expect((await owner.call("PUT", `/api/boards/${id}/members`, { type: "user", principalId: "x", role: "viewer" })).statusCode).toBe(403);
+    const recent = (await owner.call("GET", "/api/boards")).json() as { id: string }[];
+    expect(recent.some((b) => b.id === id)).toBe(false);
+    const list = (await owner.call("GET", "/api/boards?filter=archived")).json() as { id: string }[];
+    expect(list.some((b) => b.id === id)).toBe(true);
+    expect((await editor.call("POST", `/api/boards/${id}/unarchive`)).statusCode).toBe(403);
+    expect((await owner.call("POST", `/api/boards/${id}/unarchive`)).statusCode).toBe(200);
+    expect((await owner.call("GET", `/api/boards/${id}`)).json()).toMatchObject({ role: "owner", archived_at: null });
+    expect((await owner.call("PATCH", `/api/boards/${id}`, { title: "Yes" })).statusCode).toBe(200);
+  });
+
+  it("lets an owner delete an archived board, and keeps a restored board from being archived again at once", async () => {
+    const owner = await user("rt-owner3");
+    const id = await mk(owner);
+    await age(id, 30);
+    await owner.call("POST", `/api/boards/${id}/archive`);
+    await owner.call("POST", `/api/boards/${id}/unarchive`);
+    const { rows } = await db.query<{ months: string }>("SELECT extract(day from now() - last_opened_at) AS months FROM boards WHERE id = $1", [id]);
+    expect(Number(rows[0]!.months)).toBe(0);
+    await owner.call("POST", `/api/boards/${id}/archive`);
+    expect((await owner.call("DELETE", `/api/boards/${id}`)).statusCode).toBe(200);
+  });
+
+  it("restarts the clock when a board is opened, at most once an hour", async () => {
+    const owner = await user("rt-owner4");
+    const id = await mk(owner);
+    await age(id, 3);
+    await owner.call("GET", `/api/boards/${id}`);
+    const { rows } = await db.query<{ days: string }>("SELECT extract(day from now() - last_opened_at) AS days FROM boards WHERE id = $1", [id]);
+    expect(Number(rows[0]!.days)).toBe(0);
   });
 });

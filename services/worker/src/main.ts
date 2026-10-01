@@ -1,6 +1,6 @@
 import { createServer } from "node:http";
 import pg from "pg";
-import { compactBusyBoards, Counter, createRegistry, Histogram, LATENCY_BUCKETS, serveMetrics, indexStaleBoards, migrate, pruneAutoVersions, purgeExpiredBoards, S3ObjectStore, snapshotChangedBoards } from "@miroclone/server-core";
+import { archiveStaleBoards, compactBusyBoards, Counter, createRegistry, Histogram, LATENCY_BUCKETS, serveMetrics, indexStaleBoards, migrate, pruneAutoVersions, purgeExpiredBoards, S3ObjectStore, snapshotChangedBoards } from "@miroclone/server-core";
 import { sendPendingEmails, type Mailer } from "./email.js";
 import { SmtpMailer } from "./smtp.js";
 
@@ -73,6 +73,12 @@ const every = (name: string, ms: number, job: () => Promise<unknown>) => {
 const timers = [
   ...(mailer && appUrl ? [every("emails", 30_000, () => sendPendingEmails(db, mailer, appUrl))] : []),
   every("purge", 60 * 60 * 1000, () => purgeExpiredBoards(db, store)),
+  // Boards that nobody has opened for the configured time are archived and become read-only (ADM-4).
+  every("retention", 60 * 60 * 1000, async () => {
+    const ids = await archiveStaleBoards(db);
+    for (const id of ids) console.log(JSON.stringify({ type: "audit", time: new Date().toISOString(), action: "retention_archive", actor: "system", boardId: id }));
+    return { archived: ids.length };
+  }),
   // Stored updates merge here, so the collaboration service never spends its single thread on it.
   every("compact", 15_000, async () => ({ compacted: await compactBusyBoards(db) })),
   // New and changed boards reach search within seconds (BRD-4).

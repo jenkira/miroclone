@@ -209,6 +209,12 @@ export function BoardView({ id, me }: { id: string; me: Me }) {
           ))}
         </span>
       </header>
+      {meta.archived_at && (
+        <p role="status" style={{ margin: 0, padding: "2px 8px", background: "#eceff1" }}>
+          This board is archived, so it's read-only.{" "}
+          {meta.canRestore && <button onClick={() => api.unarchiveBoard(id).then(() => location.reload())}>Restore from archive</button>}
+        </p>
+      )}
       {notice && <p role="alert" style={{ margin: 0, padding: "2px 8px", background: "#fff3e0" }}>{notice}</p>}
       <Toolbar tool={tool} onChange={(t) => { setTool(t); if (t === "comment") setShowComments(true); if (t === "vote") setPanel("voting"); }} disabled={readOnly} canComment={canComment} canVote={canComment} />
       <FormatBar board={session.board} selection={selected} readOnly={readOnly} api={apiRef} />

@@ -6,7 +6,7 @@ import { useClassifications } from "./classifications.js";
 import { Notifications } from "./Notifications.js";
 import { clearOfflineCache } from "./offline.js";
 
-const filters = [["recent", "Recent"], ["owned", "Owned by me"], ["shared", "Shared with me"], ["starred", "Starred"], ["deleted", "Recycle bin"]] as const;
+const filters = [["recent", "Recent"], ["owned", "Owned by me"], ["shared", "Shared with me"], ["starred", "Starred"], ["archived", "Archived"], ["deleted", "Recycle bin"]] as const;
 
 export function Dashboard({ me }: { me: Me }) {
   const [filter, setFilter] = useState<(typeof filters)[number][0]>("recent");
@@ -118,6 +118,8 @@ export function Dashboard({ me }: { me: Me }) {
             {filter === "deleted" ? b.title : <a href={`#/board/${b.id}`}>{b.title}</a>} <em>{b.classification}</em> ({b.role}){" "}
             {filter === "deleted"
               ? <button onClick={() => api.restoreBoard(b.id).then(load)}>Restore</button>
+              : filter === "archived"
+              ? (b.role === "owner" ? <button onClick={() => api.unarchiveBoard(b.id).then(load)}>Restore from archive</button> : <em>Read-only</em>)
               : <>
                   <button aria-pressed={b.starred} onClick={() => api.star(b.id, !b.starred).then(load)}>{b.starred ? "Unstar" : "Star"}</button>
                   {b.role === "owner" && <>
@@ -128,6 +130,7 @@ export function Dashboard({ me }: { me: Me }) {
                         {spaces.filter((s) => s.role === "owner" || s.role === "editor").map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
                       </select>
                     </label>{" "}
+                    <button onClick={() => { if (window.confirm(`Archive "${b.title}"? It becomes read-only, and you can restore it from the Archived list.`)) void api.archiveBoard(b.id).then(() => Promise.all([load(), loadSpaces()])); }}>Archive</button>{" "}
                     <button onClick={() => api.deleteBoard(b.id).then(() => Promise.all([load(), loadSpaces()]))}>Delete</button>
                   </>}
                 </>}
