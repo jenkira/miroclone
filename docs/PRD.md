@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Status | Draft for review |
-| Version | 0.8 |
+| Version | 0.9 |
 | Date | 30 September 2026 |
 | Owner | To be confirmed |
 | Working name | Miroclone |
@@ -40,6 +40,7 @@ Table 1. Change history
 | 0.6 | 30 September 2026 | Added section 8.5.1 on connecting ESO to Passwordstate through the ESO webhook provider, and narrowed Q16. |
 | 0.7 | 30 September 2026 | Recorded implementation decisions: the session encryption key replaces the session signing key in section 8.5, the collaboration route hashes on the URL path in section 8.4, and the API stores the signed-in user's Graph tokens in the session (section 8.3). Added a risk for those tokens. |
 | 0.8 | 1 October 2026 | Recorded implementation decisions: the API scans uploads and the worker handles email, purge, indexing, versions, and compaction (section 8.1), metrics use their own port (section 8.6), the restore procedure and performance results have runbooks (sections 7.1 and 8.7), and added three risks. |
+| 0.9 | 1 October 2026 | Built the remaining P2 requirements except COL-9 and MIG-6, which depend on open questions Q5 and Q17. Recorded how private mode, link previews, and PDF embeds work, added three risks, and added question Q17. |
 
 ## 2. Background and research
 
@@ -711,6 +712,9 @@ Table 15. Risks and mitigations
 | The Miro export folder holds board content outside the PROTECTED environment until an administrator imports it. | Content sits on the machine that runs the tool, and on the transfer path. | Run the tool on an approved machine. Delete the folder after the import. The tool never writes the Miro token to disk. The administrator sets each board's classification at import (MIG-5). |
 | One collaboration process serves each board, because all its connections hash to one pod. | A board with 50 editors and 200 viewers shows slower delivery at the 95th percentile than the 200 ms target in the development measurements. | Repeat the load test on the cluster, profile the pod, and size its CPU request for the busiest boards. Compaction already runs in the worker. |
 | Organisation-wide visibility (IAM-8) makes a board readable by every signed-in user. | An owner exposes a board more widely than intended. | The app blocks the option on PROTECTED boards, and ends it when an owner raises a board to PROTECTED. Each change goes in the audit log, and boards with this setting stay out of dashboards. |
+| Private mode (WSH-7) hides other people's notes in each browser only. | A participant who changes their browser sees every note, because the document reaches all editors. | Use private mode for brainstorming etiquette, not to keep content from people on the board. The board lock is different: the collaboration service enforces it, drops forged locks, and ends the lock when its owner leaves. |
+| Link previews (CNV-17) make the service fetch pages. | A preview reaches an outside site, or an internal service the user shouldn't reach (server-side request forgery). | Previews are off until an administrator lists hosts. The service fetches, never the browser. It sends no credentials, refuses loopback and link-local addresses, follows redirects only within the host, and stops at a size and time limit. Only editors can ask for one. |
+| A PDF embed (CNV-17) can carry active content. | A PDF that runs code or opens other files reaches users. | The upload route scans each PDF for malware, refuses names that run code or carry files, and shows the PDF in the browser's own viewer from a local address. Compressed object streams hide names from the check, so the scanner and the viewer stay the first layers. |
 | Entra configuration needs tenant administrator time. | Blocks R0 sign-in work. | Request the app registration, app roles, conditional access policy, and Graph consent at project start. |
 | Users rely on Miro-specific features the product lacks. | Low adoption. | Survey current Miro users before R1 and adjust priorities. |
 
@@ -742,7 +746,16 @@ The following questions need answers before or during R0:
 - **Q4a**: If migration goes ahead, how many boards need to move, and what is
   their classification in Miro?
 - **Q5**: Is a Microsoft Teams integration (such as a Teams tab or
-  notifications) a priority, and is it approved for this environment?
+  notifications) a priority, and is it approved for this environment? COL-9
+  isn't built, because posting to Teams needs an outbound call to a service
+  other than Entra ID and Microsoft Graph, which the fixed constraints don't
+  allow. A Graph-based design, where the app posts through Graph with the
+  signed-in user's token, needs the platform team to approve the extra
+  Graph permission.
+- **Q17**: Does the Miro REST API give access to board comments for your
+  plan? The product keeps comments as text with the author's name and date
+  (MIG-6) only if it does. The public REST API (v2) lists no comments
+  endpoint, so the migration tool doesn't read them.
 - **Q6**: Do users want AI features, such as summarising sticky notes or
   clustering ideas? At PROTECTED, any model service must run on premises or be
   authorised for PROTECTED.

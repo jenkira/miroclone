@@ -115,3 +115,17 @@ viewers on one board. The [performance report](../docs/operations/performance.md
 
 The script `restore-test.sh` dumps the database, restores it into a new database, and compares every table. Set the
 `POSTGRES_*` variables first. The [backup and restore guide](../docs/operations/backup-restore.md) describes when to run it.
+
+## P2 features test
+
+The script `p2.mjs` needs the full-stack setup, with the fake identity provider's administrator (`ada`), `ann`, `bob`, and
+`eve`. It checks CSV import, reactions that reach a viewer, markers and caveats in the banner, the retention rule and
+archiving, the board lock (including that a forced edit during the lock never reaches the owner), and private mode. It
+changes the marker list and the retention rule, and puts them back.
+
+## Tables, mind maps, and embeds test
+
+The script `canvas-p2.mjs` needs the full-stack setup and the `pdfinfo` tool. It checks tables, the mind map keyboard
+shortcuts (Tab for a child, Enter for a sibling) and branch delete and undo, link cards, and PDF cards. It starts a fake
+internal wiki on the machine's non-loopback address, because the link preview refuses loopback addresses. It skips the
+link checks when the machine has no such address.
